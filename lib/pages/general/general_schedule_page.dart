@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../../database/app_database.dart';
 import '../../models/period_model.dart';
 import '../week/week_schedule_page.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:io';
 
 class GeneralSchedulePage extends StatefulWidget {
   final int categoryId;
@@ -19,6 +21,9 @@ class _GeneralSchedulePageState extends State<GeneralSchedulePage> {
   TimeOfDay? endTime;
   int periodMinutes = 60;
 
+  String? periodRingtonePath;
+  String? breakRingtonePath;
+
   final List<_BreakData> breaks = [];
 
   // ---------- HELPERS ----------
@@ -29,6 +34,12 @@ class _GeneralSchedulePageState extends State<GeneralSchedulePage> {
 
   TimeOfDay _fromMinutes(int m) =>
       TimeOfDay(hour: m ~/ 60, minute: m % 60);
+
+  String _getFileName(String? path) {
+    if (path == null) return 'Not Selected';
+    return path.split('/').last;
+  }
+
 
   // ---------- UI ----------
   @override
@@ -58,6 +69,31 @@ class _GeneralSchedulePageState extends State<GeneralSchedulePage> {
               }).toList(),
               onChanged: (v) => setState(() => periodMinutes = v!),
             ),
+          ),
+
+          const Divider(),
+
+          const Text('Default Ringtones', style: TextStyle(fontWeight: FontWeight.bold)),
+          _ringtoneTile(
+            'Period Ringtone',
+            periodRingtonePath,
+                () async {
+              final path = await _pickRingtone();
+              if (path != null) {
+                setState(() => periodRingtonePath = path);
+                // Here you can also add logic to send the ringtone to ESP immediately if needed
+              }
+            },
+          ),
+          _ringtoneTile(
+            'Break Ringtone',
+            breakRingtonePath,
+                () async {
+              final path = await _pickRingtone();
+              if (path != null) {
+                setState(() => breakRingtonePath = path);
+              }
+            },
           ),
 
           const Divider(),
@@ -99,6 +135,39 @@ class _GeneralSchedulePageState extends State<GeneralSchedulePage> {
         if (t != null) onPick(t);
       },
     );
+  }
+  // ---------- NEW WIDGET: RINGTONE TILE ----------
+  Widget _ringtoneTile(String title, String? filePath, VoidCallback onPick) {
+    return ListTile(
+      title: Text(title),
+      subtitle: Text(
+        _getFileName(filePath),
+        style: const TextStyle(color: Colors.grey, fontSize: 12),
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: const Icon(Icons.music_note),
+      onTap: onPick,
+    );
+  }
+
+  // ---------- NEW METHOD: PICK RINGTONE ----------
+  Future<String?> _pickRingtone() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.audio,
+      );
+      if (result != null && result.files.single.path != null) {
+        File file = File(result.files.single.path!);
+        // You would have your logic to send the file to the ESP here.
+        // For now, we just return the path to be stored in the database.
+        print('Selected file path: ${file.path}');
+        return file.path;
+      }
+    } catch (e) {
+      // Handle exceptions from file picking
+      print('Error picking file: $e');
+    }
+    return null;
   }
 
   // ---------- ADD BREAK ----------
@@ -179,6 +248,7 @@ class _GeneralSchedulePageState extends State<GeneralSchedulePage> {
               startTime: _format(_fromMinutes(current)),
               endTime: _format(_fromMinutes(current + breakMap[current]!)),
               isBreak: true,
+              ringtone: breakRingtonePath,
             ).toMap(),
           );
           current += breakMap[current]!;
@@ -192,6 +262,7 @@ class _GeneralSchedulePageState extends State<GeneralSchedulePage> {
               startTime: _format(_fromMinutes(current)),
               endTime: _format(_fromMinutes(current + periodMinutes)),
               isBreak: false,
+              ringtone: periodRingtonePath,
             ).toMap(),
           );
           current += periodMinutes;

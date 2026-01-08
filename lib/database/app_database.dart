@@ -38,7 +38,9 @@ class AppDB {
           title TEXT,
           startTime TEXT,
           endTime TEXT,
-          isBreak INTEGER
+          ringtone TEXT,
+          isBreak INTEGER,
+          FOREIGN KEY (categoryId) REFERENCES categories(id)
         )
         ''');
       },

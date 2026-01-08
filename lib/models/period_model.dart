@@ -6,6 +6,7 @@ class PeriodModel {
   final String startTime;
   final String endTime;
   final bool isBreak;
+  final String? ringtone;
 
   PeriodModel({
     this.id,
@@ -15,7 +16,20 @@ class PeriodModel {
     required this.startTime,
     required this.endTime,
     required this.isBreak,
+    this.ringtone,
   });
+  factory PeriodModel.fromMap(Map<String, dynamic> map) {
+    return PeriodModel(
+      id: map['id'],
+      categoryId: map['categoryId'],
+      day: map['day'],
+      title: map['title'],
+      startTime: map['startTime'],
+      endTime: map['endTime'],
+      isBreak: map['isBreak'] == 1, // Converts integer from DB to boolean
+    );
+  }
+
 
   Map<String, dynamic> toMap() => {
     'id': id,
@@ -25,5 +39,6 @@ class PeriodModel {
     'startTime': startTime,
     'endTime': endTime,
     'isBreak': isBreak ? 1 : 0,
+    'ringtone': ringtone,
   };
 }

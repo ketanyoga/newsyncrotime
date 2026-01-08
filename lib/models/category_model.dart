@@ -15,6 +15,17 @@ class CategoryModel {
     this.configured = false,
   });
 
+  factory CategoryModel.fromMap(Map<String, dynamic> map) {
+    return CategoryModel(
+      id: map['id'],
+      name: map['name'],
+      color: map['color'],
+      startDate: map['startDate'],
+      endDate: map['endDate'],
+      configured: map['configured'] == 1,
+    );
+  }
+
   Map<String, dynamic> toMap() => {
     'id': id,
     'name': name,
