@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_colorpicker/flutter_colorpicker.dart'; // Add this dependency
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import '../../database/app_database.dart';
 import '../../models/category_model.dart';
 import 'category_list_page.dart';

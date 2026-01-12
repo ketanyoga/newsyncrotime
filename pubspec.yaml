@@ -41,6 +41,7 @@ dependencies:
   date_time: ^0.12.0
   flutter_math: ^0.3.0-nullsafety.1
   file_picker: ^10.2.4
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:
