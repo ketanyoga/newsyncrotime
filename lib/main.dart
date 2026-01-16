@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:newsyncrotime/database/dashboard_page.dart';
-import 'package:newsyncrotime/pages/category/create_category_page.dart';
 
 void main() {
   runApp(const MyApp());

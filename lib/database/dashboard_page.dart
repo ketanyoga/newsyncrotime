@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:sqflite/sqflite.dart';
 import '../../services/esp32_api_service.dart';
-import '../../services/database_service.dart';
+import '../database/app_database.dart';
 import '../pages/category/category_list_page.dart';
 import '../pages/category/create_category_page.dart';
-
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -15,48 +15,90 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   bool espConnected = false;
+  // This 'time' variable will now be the main display time.
+  // We'll update it to show the next period's time.
   String time = "--:--";
-  String date = "";
-  String nextPeriod = "Loading...";
+  String date = ""; // We can still keep the date from the ESP32
+  String nextPeriodInfo = "Loading..."; // For the small text below the time
   Timer? timer;
   bool hasSchedule = false;
+
+  late final Future<Database> _dbFuture;
 
   @override
   void initState() {
     super.initState();
+    _dbFuture = AppDB.instance.database;
     _init();
   }
 
   Future<void> _init() async {
-    hasSchedule = await DatabaseService.hasSchedule();
+    final db = await _dbFuture;
+
+    final countResult = await db.rawQuery('SELECT COUNT(*) as c FROM categories');
+    if (mounted) {
+      setState(() {
+        final count = countResult.first['c'] as int?;
+        hasSchedule = (count ?? 0) > 0;
+      });
+    }
+
     _checkEsp();
+    // We still load the date and check connection periodically
     timer = Timer.periodic(const Duration(seconds: 3), (_) {
       _checkEsp();
-      _loadTime();
+      _loadDateFromEsp(); // Changed to only load date, as time is handled by schedule
       _loadNextPeriod();
     });
   }
 
   Future<void> _checkEsp() async {
     final connected = await Esp32ApiService.checkConnection();
-    setState(() => espConnected = connected);
+    if (mounted) {
+      setState(() => espConnected = connected);
+    }
   }
 
-  Future<void> _loadTime() async {
+  // Renamed from _loadTime to avoid confusion. We only need the date.
+  Future<void> _loadDateFromEsp() async {
     final data = await Esp32ApiService.getTime();
-    if (data != null) {
+    if (data != null && mounted) {
       setState(() {
-        time = data['time'];
         date = data['date'];
       });
     }
   }
 
+  // MODIFIED SECTION
   Future<void> _loadNextPeriod() async {
-    final schedule = await DatabaseService.getTodaySchedule();
-    setState(() {
-      nextPeriod = schedule == null ? "No more periods" : "Next Period Soon";
-    });
+    final db = await _dbFuture;
+    final now = TimeOfDay.now();
+    final currentTime = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    final List<Map<String, dynamic>> result = await db.rawQuery(
+      'SELECT * FROM periods WHERE startTime > ? ORDER BY startTime ASC LIMIT 1',
+      [currentTime],
+    );
+
+    if (mounted) {
+      setState(() {
+        if (result.isEmpty) {
+          // If no more periods, revert to showing ESP time or a message
+          time = "--:--";
+          nextPeriodInfo = "No more periods today";
+        } else {
+          final periodTitle = result.first['title'];
+          final periodTime = result.first['startTime'];
+
+          // *** THIS IS THE KEY CHANGE ***
+          // 1. Set the main time display to the next period's start time.
+          time = periodTime;
+
+          // 2. Set the descriptive text for the banner below.
+          nextPeriodInfo = "Next: $periodTitle";
+        }
+      });
+    }
   }
 
   @override
@@ -64,6 +106,8 @@ class _DashboardPageState extends State<DashboardPage> {
     timer?.cancel();
     super.dispose();
   }
+
+  // --- UI WIDGETS SECTION ---
 
   @override
   Widget build(BuildContext context) {
@@ -76,6 +120,7 @@ class _DashboardPageState extends State<DashboardPage> {
             children: [
               _topBar(),
               const SizedBox(height: 20),
+              // This card now correctly shows the next period's time in the large display.
               _timeCard(),
               const SizedBox(height: 20),
               _scheduleButton(),
@@ -114,6 +159,7 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  // The 'time' variable used here is now updated by _loadNextPeriod()
   Widget _timeCard() {
     return Container(
       width: double.infinity,
@@ -125,7 +171,7 @@ class _DashboardPageState extends State<DashboardPage> {
       child: Column(
         children: [
           Text(date, style: const TextStyle(color: Colors.white70)),
-          Text(time,
+          Text(time, // This now shows the next period's time
               style: const TextStyle(
                   fontSize: 48,
                   color: Colors.white,
@@ -137,7 +183,7 @@ class _DashboardPageState extends State<DashboardPage> {
               color: Colors.white24,
               borderRadius: BorderRadius.circular(20),
             ),
-            child: Text("Next Period: $nextPeriod",
+            child: Text(nextPeriodInfo, // This shows "Next: Period Name"
                 style: const TextStyle(color: Colors.white)),
           )
         ],
@@ -160,7 +206,7 @@ class _DashboardPageState extends State<DashboardPage> {
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(30)),
       ),
-      child: Text(hasSchedule ? "Temp Schedule" : "Create Schedule"),
+      child: Text(hasSchedule ? "View Schedules" : "Create Schedule"),
     );
   }
 
