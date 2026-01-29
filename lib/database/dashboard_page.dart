@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 import '../../services/esp32_api_service.dart';
@@ -59,12 +60,25 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  // Renamed from _loadTime to avoid confusion. We only need the date.
   Future<void> _loadDateFromEsp() async {
-    final data = await Esp32ApiService.getTime();
-    if (data != null && mounted) {
+    if (!espConnected) return;
+    // Just send the command. Don't use `await` on a `void` and don't assign the result.
+    Esp32ApiService.getStatus();
+  }
+
+  // This helper function will be called by the stream listener
+  void _parseStatusAndUpdateUI(String statusString) {
+    if (mounted) {
+      final lines = statusString.split('\n');
+      String espDate = "";
+      for (var line in lines) {
+        if (line.startsWith("Date:")) {
+          espDate = line.replaceFirst("Date:", "").trim().split(' ')[0];
+          break;
+        }
+      }
       setState(() {
-        date = data['date'];
+        date = espDate;
       });
     }
   }
@@ -213,18 +227,36 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _actionButtons() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      // children: [
+      //   _smallButton("Skip Bell", () {
+      //     Esp32ApiService.sendCommand({"action": "skip_next_bell"});
+      //   }),
+      //   _smallButton("Announcement", () {
+      //     Navigator.pushNamed(context, "/announcement");
+      //   }),
+      //   _smallButton("Manual Ring", () {
+      //     Esp32ApiService.sendCommand(
+      //         {"action": "manual_ring", "sound": "default"});
+      //   }),
+      // ],
       children: [
-        _smallButton("Skip Bell", () {
-          Esp32ApiService.sendCommand({"action": "skip_next_bell"});
+        _smallButton("Skip Bell", () async {
+          await Esp32ApiService.sendRaw(
+              "\$SKIP#"
+          );
         }),
+
         _smallButton("Announcement", () {
           Navigator.pushNamed(context, "/announcement");
         }),
-        _smallButton("Manual Ring", () {
-          Esp32ApiService.sendCommand(
-              {"action": "manual_ring", "sound": "default"});
+
+        _smallButton("Manual Ring", () async {
+          await Esp32ApiService.sendRaw(
+              "\$T,1#"
+          );
         }),
       ],
+
     );
   }
 
