@@ -1,11 +1,1165 @@
+// // import 'dart:async';
+// // import 'dart:convert';
+// // import 'package:flutter/material.dart';
+// // import 'package:sqflite/sqflite.dart';
+// // import '../../services/esp32_api_service.dart';
+// // import '../database/app_database.dart';
+// // import '../pages/category/category_list_page.dart';
+// // import '../pages/category/create_category_page.dart';
+// //
+// // class DashboardPage extends StatefulWidget {
+// //   const DashboardPage({super.key});
+// //
+// //   @override
+// //   State<DashboardPage> createState() => _DashboardPageState();
+// // }
+// //
+// // class _DashboardPageState extends State<DashboardPage> {
+// //   bool espConnected = false;
+// //   // This 'time' variable will now be the main display time.
+// //   // We'll update it to show the next period's time.
+// //   String time = "--:--";
+// //   String date = ""; // We can still keep the date from the ESP32
+// //   String nextPeriodInfo = "Loading..."; // For the small text below the time
+// //   Timer? timer;
+// //   bool hasSchedule = false;
+// //
+// //   late final Future<Database> _dbFuture;
+// //
+// //   @override
+// //   void initState() {
+// //     super.initState();
+// //     _dbFuture = AppDB.instance.database;
+// //     _init();
+// //   }
+// //
+// //   Future<void> _init() async {
+// //     final db = await _dbFuture;
+// //
+// //     final countResult = await db.rawQuery('SELECT COUNT(*) as c FROM categories');
+// //     if (mounted) {
+// //       setState(() {
+// //         final count = countResult.first['c'] as int?;
+// //         hasSchedule = (count ?? 0) > 0;
+// //       });
+// //     }
+// //
+// //     _checkEsp();
+// //     // We still load the date and check connection periodically
+// //     timer = Timer.periodic(const Duration(seconds: 3), (_) {
+// //       _checkEsp();
+// //       _loadDateFromEsp(); // Changed to only load date, as time is handled by schedule
+// //       _loadNextPeriod();
+// //     });
+// //   }
+// //
+// //   Future<void> _checkEsp() async {
+// //     final connected = await Esp32ApiService.checkConnection();
+// //     if (mounted) {
+// //       setState(() => espConnected = connected);
+// //     }
+// //   }
+// //
+// //   Future<void> _loadDateFromEsp() async {
+// //     if (!espConnected) return;
+// //     // Just send the command. Don't use `await` on a `void` and don't assign the result.
+// //     Esp32ApiService.getStatus();
+// //   }
+// //
+// //   // This helper function will be called by the stream listener
+// //   void _parseStatusAndUpdateUI(String statusString) {
+// //     if (mounted) {
+// //       final lines = statusString.split('\n');
+// //       String espDate = "";
+// //       for (var line in lines) {
+// //         if (line.startsWith("Date:")) {
+// //           espDate = line.replaceFirst("Date:", "").trim().split(' ')[0];
+// //           break;
+// //         }
+// //       }
+// //       setState(() {
+// //         date = espDate;
+// //       });
+// //     }
+// //   }
+// //
+// //   // MODIFIED SECTION
+// //   Future<void> _loadNextPeriod() async {
+// //     final db = await _dbFuture;
+// //     final now = TimeOfDay.now();
+// //     final currentTime = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+// //
+// //     final List<Map<String, dynamic>> result = await db.rawQuery(
+// //       'SELECT * FROM periods WHERE startTime > ? ORDER BY startTime ASC LIMIT 1',
+// //       [currentTime],
+// //     );
+// //
+// //     if (mounted) {
+// //       setState(() {
+// //         if (result.isEmpty) {
+// //           // If no more periods, revert to showing ESP time or a message
+// //           time = "--:--";
+// //           nextPeriodInfo = "No more periods today";
+// //         } else {
+// //           final periodTitle = result.first['title'];
+// //           final periodTime = result.first['startTime'];
+// //
+// //           // *** THIS IS THE KEY CHANGE ***
+// //           // 1. Set the main time display to the next period's start time.
+// //           time = periodTime;
+// //
+// //           // 2. Set the descriptive text for the banner below.
+// //           nextPeriodInfo = "Next: $periodTitle";
+// //         }
+// //       });
+// //     }
+// //   }
+// //
+// //   @override
+// //   void dispose() {
+// //     timer?.cancel();
+// //     super.dispose();
+// //   }
+// //
+// //   // --- UI WIDGETS SECTION ---
+// //
+// //   @override
+// //   Widget build(BuildContext context) {
+// //     return Scaffold(
+// //       body: SafeArea(
+// //         child: Padding(
+// //           padding: const EdgeInsets.all(16),
+// //           child: Column(
+// //             crossAxisAlignment: CrossAxisAlignment.start,
+// //             children: [
+// //               _topBar(),
+// //               const SizedBox(height: 20),
+// //               // This card now correctly shows the next period's time in the large display.
+// //               _timeCard(),
+// //               const SizedBox(height: 20),
+// //               _scheduleButton(),
+// //               const SizedBox(height: 20),
+// //               _actionButtons(),
+// //               const Spacer(),
+// //               _bottomNav(context),
+// //             ],
+// //           ),
+// //         ),
+// //       ),
+// //     );
+// //   }
+// //
+// //   Widget _topBar() {
+// //     return Row(
+// //       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+// //       children: [
+// //         const Text("Dashboard",
+// //             style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+// //         Container(
+// //           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+// //           decoration: BoxDecoration(
+// //             color: espConnected ? Colors.green : Colors.red,
+// //             borderRadius: BorderRadius.circular(20),
+// //           ),
+// //           child: Row(
+// //             children: const [
+// //               Icon(Icons.wifi, color: Colors.white, size: 16),
+// //               SizedBox(width: 6),
+// //               Text("WiFi", style: TextStyle(color: Colors.white)),
+// //             ],
+// //           ),
+// //         )
+// //       ],
+// //     );
+// //   }
+// //
+// //   // The 'time' variable used here is now updated by _loadNextPeriod()
+// //   Widget _timeCard() {
+// //     return Container(
+// //       width: double.infinity,
+// //       padding: const EdgeInsets.all(20),
+// //       decoration: BoxDecoration(
+// //         color: Colors.blue,
+// //         borderRadius: BorderRadius.circular(20),
+// //       ),
+// //       child: Column(
+// //         children: [
+// //           Text(date, style: const TextStyle(color: Colors.white70)),
+// //           Text(time, // This now shows the next period's time
+// //               style: const TextStyle(
+// //                   fontSize: 48,
+// //                   color: Colors.white,
+// //                   fontWeight: FontWeight.bold)),
+// //           const SizedBox(height: 10),
+// //           Container(
+// //             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+// //             decoration: BoxDecoration(
+// //               color: Colors.white24,
+// //               borderRadius: BorderRadius.circular(20),
+// //             ),
+// //             child: Text(nextPeriodInfo, // This shows "Next: Period Name"
+// //                 style: const TextStyle(color: Colors.white)),
+// //           )
+// //         ],
+// //       ),
+// //     );
+// //   }
+// //
+// //   Widget _scheduleButton() {
+// //     return ElevatedButton(
+// //       onPressed: () {
+// //         Navigator.push(
+// //           context,
+// //           MaterialPageRoute(
+// //               builder: (_) =>
+// //               hasSchedule ? const CategoryListPage() : const CreateCategoryPage()),
+// //         );
+// //       },
+// //       style: ElevatedButton.styleFrom(
+// //         minimumSize: const Size(double.infinity, 50),
+// //         shape: RoundedRectangleBorder(
+// //             borderRadius: BorderRadius.circular(30)),
+// //       ),
+// //       child: Text(hasSchedule ? "View Schedules" : "Create Schedule"),
+// //     );
+// //   }
+// //
+// //   Widget _actionButtons() {
+// //     return Row(
+// //       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+// //       // children: [
+// //       //   _smallButton("Skip Bell", () {
+// //       //     Esp32ApiService.sendCommand({"action": "skip_next_bell"});
+// //       //   }),
+// //       //   _smallButton("Announcement", () {
+// //       //     Navigator.pushNamed(context, "/announcement");
+// //       //   }),
+// //       //   _smallButton("Manual Ring", () {
+// //       //     Esp32ApiService.sendCommand(
+// //       //         {"action": "manual_ring", "sound": "default"});
+// //       //   }),
+// //       // ],
+// //       children: [
+// //         _smallButton("Skip Bell", () async {
+// //           await Esp32ApiService.sendRaw(
+// //               "\$SKIP#"
+// //           );
+// //         }),
+// //
+// //         _smallButton("Announcement", () {
+// //           Navigator.pushNamed(context, "/announcement");
+// //         }),
+// //
+// //         _smallButton("Manual Ring", () async {
+// //           await Esp32ApiService.sendRaw(
+// //               "\$T,1#"
+// //           );
+// //         }),
+// //       ],
+// //
+// //     );
+// //   }
+// //
+// //   Widget _smallButton(String text, VoidCallback onTap) {
+// //     return Expanded(
+// //       child: Padding(
+// //         padding: const EdgeInsets.symmetric(horizontal: 4),
+// //         child: OutlinedButton(
+// //           onPressed: onTap,
+// //           child: Text(text, textAlign: TextAlign.center),
+// //         ),
+// //       ),
+// //     );
+// //   }
+// //
+// //   Widget _bottomNav(BuildContext context) {
+// //     return Row(
+// //       mainAxisAlignment: MainAxisAlignment.spaceAround,
+// //       children: [
+// //         IconButton(icon: const Icon(Icons.home), onPressed: () {}),
+// //         IconButton(
+// //             icon: const Icon(Icons.calendar_today),
+// //             onPressed: () {
+// //               // today's schedule page
+// //             }),
+// //         IconButton(
+// //             icon: const Icon(Icons.settings),
+// //             onPressed: () {
+// //               Navigator.push(context,
+// //                   MaterialPageRoute(builder: (_) => const CategoryListPage()));
+// //             }),
+// //       ],
+// //     );
+// //   }
+// // }
+//
+//
+//
+//
+//
+// import 'dart:async';
+// import 'package:flutter/material.dart';
+// import 'package:sqflite/sqflite.dart';
+// import 'package:simple_animations/simple_animations.dart'; // Correct import
+// import '../../services/esp32_api_service.dart';
+// import '../database/app_database.dart';
+// import '../pages/category/category_list_page.dart';
+// import '../pages/category/create_category_page.dart';
+//
+// class DashboardPage extends StatefulWidget {
+//   const DashboardPage({super.key});
+//
+//   @override
+//   State<DashboardPage> createState() => _DashboardPageState();
+// }
+//
+// class _DashboardPageState extends State<DashboardPage> with TickerProviderStateMixin {
+//   bool espConnected = false;
+//   String time = "--:--";
+//   String date = "";
+//   String nextPeriodInfo = "Loading...";
+//   Timer? timer;
+//   bool hasSchedule = false;
+//
+//   late final Future<Database> _dbFuture;
+//   late AnimationController _animationController;
+//
+//   @override
+//   void initState() {
+//     super.initState();
+//     _dbFuture = AppDB.instance.database;
+//
+//     // Animation controller for the time card's breathing effect
+//     _animationController = AnimationController(
+//       vsync: this,
+//       duration: const Duration(seconds: 2),
+//     )..repeat(reverse: true);
+//
+//     _init();
+//   }
+//
+//   Future<void> _init() async {
+//     final db = await _dbFuture;
+//
+//     final countResult = await db.rawQuery('SELECT COUNT(*) as c FROM categories');
+//     if (mounted) {
+//       setState(() {
+//         final count = countResult.first['c'] as int?;
+//         hasSchedule = (count ?? 0) > 0;
+//       });
+//     }
+//
+//     _checkEsp();
+//     timer = Timer.periodic(const Duration(seconds: 3), (_) {
+//       _checkEsp();
+//       _loadDateFromEsp();
+//       _loadNextPeriod();
+//     });
+//   }
+//
+//   Future<void> _checkEsp() async {
+//     final connected = await Esp32ApiService.checkConnection();
+//     if (mounted) {
+//       setState(() => espConnected = connected);
+//     }
+//   }
+//
+//   Future<void> _loadDateFromEsp() async {
+//     if (!espConnected) return;
+//     Esp32ApiService.getStatus();
+//   }
+//
+//   void _parseStatusAndUpdateUI(String statusString) {
+//     if (mounted) {
+//       final lines = statusString.split('\n');
+//       String espDate = "";
+//       for (var line in lines) {
+//         if (line.startsWith("Date:")) {
+//           espDate = line.replaceFirst("Date:", "").trim().split(' ')[0];
+//           break;
+//         }
+//       }
+//       setState(() {
+//         date = espDate;
+//       });
+//     }
+//   }
+//
+//   Future<void> _loadNextPeriod() async {
+//     final db = await _dbFuture;
+//     final now = TimeOfDay.now();
+//     final currentTime = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+//
+//     final List<Map<String, dynamic>> result = await db.rawQuery(
+//       'SELECT * FROM periods WHERE startTime > ? ORDER BY startTime ASC LIMIT 1',
+//       [currentTime],
+//     );
+//
+//     if (mounted) {
+//       setState(() {
+//         if (result.isEmpty) {
+//           time = "--:--";
+//           nextPeriodInfo = "No more periods today";
+//         } else {
+//           final periodTitle = result.first['title'];
+//           final periodTime = result.first['startTime'];
+//           time = periodTime;
+//           nextPeriodInfo = "Next: $periodTitle";
+//         }
+//       });
+//     }
+//   }
+//
+//   @override
+//   void dispose() {
+//     timer?.cancel();
+//     _animationController.dispose();
+//     super.dispose();
+//   }
+//
+//   // --- NEW AESTHETIC UI WIDGETS SECTION ---
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     return Scaffold(
+//       backgroundColor: const Color(0xFFF4F7FC), // A light, clean background color
+//       body: SafeArea(
+//         child: Padding(
+//           padding: const EdgeInsets.symmetric(horizontal: 16.0),
+//           child: Column(
+//             children: [
+//               const SizedBox(height: 16),
+//               _topBar(),
+//               const SizedBox(height: 24),
+//               _timeCard(),
+//               const SizedBox(height: 24),
+//               _scheduleCard(),
+//               const SizedBox(height: 16),
+//               _actionCardGrid(),
+//               // const Spacer(),
+//               // _bottomNav(context),
+//             ],
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+//
+//   Widget _topBar() {
+//     return Row(
+//       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+//       children: [
+//         const Text("Dashboard",
+//             style: TextStyle(
+//                 fontSize: 28,
+//                 fontWeight: FontWeight.bold,
+//                 color: Color(0xFF1A2552))),
+//         Container(
+//           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+//           decoration: BoxDecoration(
+//             color: espConnected ? Colors.green.shade400 : Colors.red.shade400,
+//             borderRadius: BorderRadius.circular(20),
+//             boxShadow: [
+//               BoxShadow(
+//                   color: espConnected
+//                       ? Colors.green.withOpacity(0.3)
+//                       : Colors.red.withOpacity(0.3),
+//                   blurRadius: 8,
+//                   offset: const Offset(0, 4))
+//             ],
+//           ),
+//           child: Row(
+//             children: [
+//               Icon(espConnected ? Icons.wifi_rounded : Icons.wifi_off_rounded,
+//                   color: Colors.white, size: 18),
+//               const SizedBox(width: 8),
+//               Text(espConnected ? "Connected" : "Offline",
+//                   style: const TextStyle(
+//                       color: Colors.white, fontWeight: FontWeight.w600)),
+//             ],
+//           ),
+//         )
+//       ],
+//     );
+//   }
+//
+//   Widget _timeCard() {
+//     // This creates a "breathing" gradient animation for the background
+//     final tween = MovieTween()
+//       ..tween('begin', ColorTween(begin: Colors.blue.shade300, end: Colors.blue.shade400), duration: const Duration(seconds: 2))
+//       ..tween('end', ColorTween(begin: Colors.purple.shade300, end: Colors.purple.shade400), duration: const Duration(seconds: 2));
+//
+//
+//     return LoopAnimationBuilder<Movie>(
+//       tween: tween,
+//       duration: tween.duration,
+//       builder: (context, value, child) {
+//         return Container(
+//           width: double.infinity,
+//           padding: const EdgeInsets.all(24),
+//           decoration: BoxDecoration(
+//             gradient: LinearGradient(
+//               colors: [value.get('begin'), value.get('end')],
+//               begin: Alignment.topLeft,
+//               end: Alignment.bottomRight,
+//             ),
+//             borderRadius: BorderRadius.circular(24),
+//             boxShadow: [
+//               BoxShadow(
+//                 color: Colors.blue.withOpacity(0.25),
+//                 blurRadius: 15,
+//                 offset: const Offset(0, 8),
+//               )
+//             ],
+//           ),
+//           child: child,
+//         );
+//       },
+//       child: Column(
+//         children: [
+//           Text(date, style: const TextStyle(color: Colors.white70, fontSize: 16)),
+//           const SizedBox(height: 8),
+//           Text(
+//             time,
+//             style: const TextStyle(
+//               fontSize: 64,
+//               color: Colors.white,
+//               fontWeight: FontWeight.bold,
+//               shadows: [
+//                 Shadow(
+//                   color: Colors.black26,
+//                   blurRadius: 10,
+//                   offset: Offset(0, 4),
+//                 )
+//               ],
+//             ),
+//           ),
+//           const SizedBox(height: 12),
+//           Container(
+//             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+//             decoration: BoxDecoration(
+//               color: Colors.white.withOpacity(0.2),
+//               borderRadius: BorderRadius.circular(20),
+//             ),
+//             child: Text(nextPeriodInfo,
+//                 style: const TextStyle(
+//                     color: Colors.white,
+//                     fontSize: 14,
+//                     fontWeight: FontWeight.w500)),
+//           )
+//         ],
+//       ),
+//     );
+//   }
+//
+//   Widget _scheduleCard() {
+//     return Card(
+//       elevation: 2,
+//       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+//       clipBehavior: Clip.antiAlias, // Ensures InkWell ripple respects the border
+//       child: InkWell(
+//         onTap: () {
+//           Navigator.push(
+//             context,
+//             MaterialPageRoute(
+//                 builder: (_) => hasSchedule
+//                     ? const CategoryListPage()
+//                     : const CreateCategoryPage()),
+//           );
+//         },
+//         child: Padding(
+//           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+//           child: Row(
+//             children: [
+//               Icon(
+//                   hasSchedule
+//                       ? Icons.list_alt_rounded
+//                       : Icons.add_circle_outline_rounded,
+//                   color: Theme.of(context).primaryColor,
+//                   size: 32),
+//               const SizedBox(width: 16),
+//               Expanded(
+//                 child: Text(
+//                   hasSchedule ? "View Schedules" : "Create New Schedule",
+//                   style: const TextStyle(
+//                       fontSize: 18,
+//                       fontWeight: FontWeight.bold,
+//                       color: Color(0xFF1A2552)),
+//                 ),
+//               ),
+//               const Icon(Icons.arrow_forward_ios_rounded,
+//                   color: Colors.grey, size: 18),
+//             ],
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+//
+//   Widget _actionCardGrid() {
+//     return Column(
+//       crossAxisAlignment: CrossAxisAlignment.start,
+//       children: [
+//         const Text(
+//           "Quick Actions",
+//           style: TextStyle(
+//               fontSize: 20,
+//               fontWeight: FontWeight.bold,
+//               color: Color(0xFF1A2552)),
+//         ),
+//         const SizedBox(height: 16),
+//         Row(
+//           children: [
+//             _smallActionCard(
+//                 "Skip Bell", Icons.skip_next_rounded, Colors.orange, () async {
+//               await Esp32ApiService.sendRaw("\$SKIP#");
+//             }),
+//             const SizedBox(width: 12),
+//             _smallActionCard("Announce", Icons.campaign_rounded, Colors.teal,
+//                     () {
+//                   Navigator.pushNamed(context, "/announcement");
+//                 }),
+//             const SizedBox(width: 12),
+//             _smallActionCard(
+//                 "Manual Ring", Icons.notifications_active_rounded, Colors.red,
+//                     () async {
+//                   await Esp32ApiService.sendRaw("\$T,1#");
+//                 }),
+//           ],
+//         ),
+//       ],
+//     );
+//   }
+//
+//   Widget _smallActionCard(
+//       String text, IconData icon, MaterialColor color, VoidCallback onTap) {
+//     return Expanded(
+//       child: Card(
+//         elevation: 2,
+//         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+//         clipBehavior: Clip.antiAlias,
+//         child: InkWell(
+//           onTap: onTap,
+//           child: Padding(
+//             padding: const EdgeInsets.symmetric(vertical: 20),
+//             child: Column(
+//               mainAxisAlignment: MainAxisAlignment.center,
+//               children: [
+//                 Icon(icon, color: color, size: 30),
+//                 const SizedBox(height: 10),
+//                 Text(
+//                   text,
+//                   textAlign: TextAlign.center,
+//                   style: TextStyle(
+//                       fontWeight: FontWeight.w600, color: color.shade800), // FIX: Now works with MaterialColor
+//                 ),
+//               ],
+//             ),
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+//
+//   // Widget _bottomNav(BuildContext context) {
+//   //   return Container(
+//   //     padding: const EdgeInsets.symmetric(vertical: 12),
+//   //     margin: const EdgeInsets.only(bottom: 8),
+//   //     decoration: BoxDecoration(
+//   //       color: Colors.white,
+//   //       borderRadius: BorderRadius.circular(24),
+//   //       boxShadow: [
+//   //         BoxShadow(
+//   //             color: Colors.black.withOpacity(0.05),
+//   //             blurRadius: 10,
+//   //             spreadRadius: 2)
+//   //       ],
+//   //     ),
+//   //     child: Row(
+//   //       mainAxisAlignment: MainAxisAlignment.spaceAround,
+//   //       children: [
+//   //         IconButton(
+//   //             icon: const Icon(Icons.home_rounded, color: Colors.blue, size: 30),
+//   //             onPressed: () {}),
+//   //         IconButton(
+//   //             icon: const Icon(Icons.calendar_today_rounded, color: Colors.grey, size: 28),
+//   //             onPressed: () {
+//   //               // Navigate to today's schedule page
+//   //             }),
+//   //         IconButton(
+//   //             icon: const Icon(Icons.settings_rounded, color: Colors.grey, size: 28),
+//   //             onPressed: () {
+//   //               Navigator.push(context,
+//   //                   MaterialPageRoute(builder: (_) => const CategoryListPage()));
+//   //             }),
+//   //       ],
+//   //     ),
+//   //   );
+//   // }
+// }
+//
+
+// import 'dart:async';
+// import 'package:flutter/material.dart';
+// import 'package:newsyncrotime/pages/emergency/emergency_page.dart';
+// import 'package:sqflite/sqflite.dart';
+// import 'package:simple_animations/simple_animations.dart'; // Correct import
+// import '../../services/esp32_api_service.dart';
+// import '../database/app_database.dart';
+// import '../pages/announcement/announcement_page.dart';
+// import '../pages/category/category_list_page.dart';
+// import '../pages/category/create_category_page.dart';
+// import '../pages/today_schedule_page.dart';
+//
+// class DashboardPage extends StatefulWidget {
+//   const DashboardPage({super.key});
+//
+//   @override
+//   State<DashboardPage> createState() => _DashboardPageState();
+// }
+//
+// class _DashboardPageState extends State<DashboardPage> with TickerProviderStateMixin {
+//   bool espConnected = false;
+//   String time = "--:--";
+//   String date = "";
+//   String nextPeriodInfo = "Loading...";
+//   Timer? timer;
+//   bool hasSchedule = false;
+//
+//   late final Future<Database> _dbFuture;
+//   late AnimationController _animationController;
+//
+//   @override
+//   void initState() {
+//     super.initState();
+//     _dbFuture = AppDB.instance.database;
+//
+//     // Animation controller for the time card's breathing effect
+//     _animationController = AnimationController(
+//       vsync: this,
+//       duration: const Duration(seconds: 2),
+//     )..repeat(reverse: true);
+//
+//     _init();
+//   }
+//
+//   Future<void> _init() async {
+//     final db = await _dbFuture;
+//
+//     final countResult = await db.rawQuery('SELECT COUNT(*) as c FROM categories');
+//     if (mounted) {
+//       setState(() {
+//         final count = countResult.first['c'] as int?;
+//         hasSchedule = (count ?? 0) > 0;
+//       });
+//     }
+//
+//     _checkEsp();
+//     timer = Timer.periodic(const Duration(seconds: 3), (_) {
+//       _checkEsp();
+//       _loadDateFromEsp();
+//       _loadNextPeriod();
+//     });
+//   }
+//
+//   Future<void> _checkEsp() async {
+//     final connected = await Esp32ApiService.checkConnection();
+//     if (mounted) {
+//       setState(() => espConnected = connected);
+//     }
+//   }
+//
+//   Future<void> _loadDateFromEsp() async {
+//     if (!espConnected) return;
+//     Esp32ApiService.getStatus();
+//   }
+//
+//   void _parseStatusAndUpdateUI(String statusString) {
+//     if (mounted) {
+//       final lines = statusString.split('\n');
+//       String espDate = "";
+//       for (var line in lines) {
+//         if (line.startsWith("Date:")) {
+//           espDate = line.replaceFirst("Date:", "").trim().split(' ')[0];
+//           break;
+//         }
+//       }
+//       setState(() {
+//         date = espDate;
+//       });
+//     }
+//   }
+//
+//   Future<void> _loadNextPeriod() async {
+//     final db = await _dbFuture;
+//     final now = TimeOfDay.now();
+//     final currentTime = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+//
+//     final List<Map<String, dynamic>> result = await db.rawQuery(
+//       'SELECT * FROM periods WHERE startTime > ? ORDER BY startTime ASC LIMIT 1',
+//       [currentTime],
+//     );
+//
+//     if (mounted) {
+//       setState(() {
+//         if (result.isEmpty) {
+//           time = "--:--";
+//           nextPeriodInfo = "No more periods today";
+//         } else {
+//           final periodTitle = result.first['title'];
+//           final periodTime = result.first['startTime'];
+//           time = periodTime;
+//           nextPeriodInfo = "Next: $periodTitle";
+//         }
+//       });
+//     }
+//   }
+//
+//   @override
+//   void dispose() {
+//     timer?.cancel();
+//     _animationController.dispose();
+//     super.dispose();
+//   }
+//
+//   // --- NEW AESTHETIC UI WIDGETS SECTION ---
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     return Scaffold(
+//       backgroundColor: const Color(0xFFF4F7FC), // A light, clean background color
+//       body: SafeArea(
+//         child: Padding(
+//           padding: const EdgeInsets.symmetric(horizontal: 16.0),
+//           child: Column(
+//             children: [
+//               const SizedBox(height: 16),
+//               _topBar(),
+//               const SizedBox(height: 24),
+//               _timeCard(),
+//               const SizedBox(height: 24),
+//               _scheduleCard(),
+//               const SizedBox(height: 16),
+//               _actionCardGrid(),
+//               const SizedBox(height: 16),
+//               _emergencyCard(), // The new emergency card
+//               const Spacer(),
+//               // _bottomNav(context), // If you need this, uncomment it
+//             ],
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+//
+//   Widget _topBar() {
+//     return Row(
+//       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+//       children: [
+//         const Text("Dashboard",
+//             style: TextStyle(
+//                 fontSize: 28,
+//                 fontWeight: FontWeight.bold,
+//                 color: Color(0xFF1A2552))),
+//         Container(
+//           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+//           decoration: BoxDecoration(
+//             color: espConnected ? Colors.green.shade400 : Colors.red.shade400,
+//             borderRadius: BorderRadius.circular(20),
+//             boxShadow: [
+//               BoxShadow(
+//                   color: espConnected
+//                       ? Colors.green.withOpacity(0.3)
+//                       : Colors.red.withOpacity(0.3),
+//                   blurRadius: 8,
+//                   offset: const Offset(0, 4))
+//             ],
+//           ),
+//           child: Row(
+//             children: [
+//               Icon(espConnected ? Icons.wifi_rounded : Icons.wifi_off_rounded,
+//                   color: Colors.white, size: 18),
+//               const SizedBox(width: 8),
+//               Text(espConnected ? "Connected" : "Offline",
+//                   style: const TextStyle(
+//                       color: Colors.white, fontWeight: FontWeight.w600)),
+//             ],
+//           ),
+//         )
+//       ],
+//     );
+//   }
+//
+//   Widget _timeCard() {
+//     // This creates a "breathing" gradient animation for the background
+//     final tween = MovieTween()
+//       ..tween('begin', ColorTween(begin: Colors.blue.shade300, end: Colors.blue.shade400), duration: const Duration(seconds: 2))
+//       ..tween('end', ColorTween(begin: Colors.purple.shade300, end: Colors.purple.shade400), duration: const Duration(seconds: 2));
+//
+//
+//     return LoopAnimationBuilder<Movie>(
+//       tween: tween,
+//       duration: tween.duration,
+//       builder: (context, value, child) {
+//         return Container(
+//           width: double.infinity,
+//           padding: const EdgeInsets.all(24),
+//           decoration: BoxDecoration(
+//             gradient: LinearGradient(
+//               colors: [value.get('begin'), value.get('end')],
+//               begin: Alignment.topLeft,
+//               end: Alignment.bottomRight,
+//             ),
+//             borderRadius: BorderRadius.circular(24),
+//             boxShadow: [
+//               BoxShadow(
+//                 color: Colors.blue.withOpacity(0.25),
+//                 blurRadius: 15,
+//                 offset: const Offset(0, 8),
+//               )
+//             ],
+//           ),
+//           child: child,
+//         );
+//       },
+//       child: Column(
+//         children: [
+//           Text(date, style: const TextStyle(color: Colors.white70, fontSize: 16)),
+//           const SizedBox(height: 8),
+//           Text(
+//             time,
+//             style: const TextStyle(
+//               fontSize: 64,
+//               color: Colors.white,
+//               fontWeight: FontWeight.bold,
+//               shadows: [
+//                 Shadow(
+//                   color: Colors.black26,
+//                   blurRadius: 10,
+//                   offset: Offset(0, 4),
+//                 )
+//               ],
+//             ),
+//           ),
+//           const SizedBox(height: 12),
+//           Container(
+//             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+//             decoration: BoxDecoration(
+//               color: Colors.white.withOpacity(0.2),
+//               borderRadius: BorderRadius.circular(20),
+//             ),
+//             child: Text(nextPeriodInfo,
+//                 style: const TextStyle(
+//                     color: Colors.white,
+//                     fontSize: 14,
+//                     fontWeight: FontWeight.w500)),
+//           )
+//         ],
+//       ),
+//     );
+//   }
+//
+//
+//   Widget _scheduleCard() {
+//     return Card(
+//       elevation: 2,
+//       shape: RoundedRectangleBorder(
+//         borderRadius: BorderRadius.circular(16),
+//       ),
+//       clipBehavior: Clip.antiAlias, // InkWell ripple respects border
+//       child: InkWell(
+//         onTap: () {
+//           Navigator.push(
+//             context,
+//             MaterialPageRoute(
+//               builder: (_) => hasSchedule
+//                   ? const TodaySchedulePage()
+//                   : const CreateCategoryPage(),
+//             ),
+//           );
+//         },
+//         child: Padding(
+//           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+//           child: Row(
+//             children: [
+//               Icon(
+//                   hasSchedule
+//                       ? Icons.list_alt_rounded
+//                       : Icons.add_circle_outline_rounded,
+//                   color: Theme.of(context).primaryColor,
+//                   size: 32),
+//               const SizedBox(width: 16),
+//               Expanded(
+//                 child: Text(
+//                   hasSchedule ? "View Schedules" : "Create New Schedule",
+//                   style: const TextStyle(
+//                       fontSize: 18,
+//                       fontWeight: FontWeight.bold,
+//                       color: Color(0xFF1A2552)),
+//                 ),
+//               ),
+//               const Icon(Icons.arrow_forward_ios_rounded,
+//                   color: Colors.grey, size: 18),
+//             ],
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+//
+//   Widget _actionCardGrid() {
+//     return Column(
+//       crossAxisAlignment: CrossAxisAlignment.start,
+//       children: [
+//         const Text(
+//           "Quick Actions",
+//           style: TextStyle(
+//             fontSize: 20,
+//             fontWeight: FontWeight.bold,
+//             color: Color(0xFF1A2552),
+//           ),
+//         ),
+//         const SizedBox(height: 16),
+//         Row(
+//           children: [
+//             _smallActionCard(
+//               "Skip Bell",
+//               Icons.skip_next_rounded,
+//               Colors.orange,
+//                   () async {
+//                 await Esp32ApiService.sendRaw("\$SKIP#");
+//               },
+//             ),
+//             const SizedBox(width: 12),
+//             _smallActionCard(
+//               "Announce",
+//               Icons.campaign_rounded,
+//               Colors.teal,
+//                   () {
+//                 Navigator.push(
+//                   context,
+//                   MaterialPageRoute(
+//                     builder: (context) => const AnnouncementPage(),
+//                   ),
+//                 );
+//               },
+//             ),
+//             const SizedBox(width: 12),
+//             _smallActionCard(
+//               "Manual Ring",
+//               Icons.touch_app_rounded,
+//               Colors.indigo,
+//                   () async {
+//                 await Esp32ApiService.sendRaw("\$T,1#");
+//               },
+//             ),
+//           ],
+//         ),
+//       ],
+//     );
+//   }
+//
+//
+//   Widget _smallActionCard(String title, IconData icon, Color color, VoidCallback onTap) {
+//     return Expanded(
+//       child: InkWell(
+//         onTap: onTap,
+//         borderRadius: BorderRadius.circular(16),
+//         child: Container(
+//           padding: const EdgeInsets.symmetric(vertical: 16),
+//           decoration: BoxDecoration(
+//             color: Colors.white,
+//             borderRadius: BorderRadius.circular(16),
+//             boxShadow: [
+//               BoxShadow(
+//                 color: Colors.grey.withOpacity(0.1),
+//                 blurRadius: 10,
+//                 offset: const Offset(0, 5),
+//               ),
+//             ],
+//             border: Border.all(color: Colors.grey.shade200, width: 1),
+//           ),
+//           child: Column(
+//             mainAxisAlignment: MainAxisAlignment.center,
+//             children: [
+//               Icon(icon, color: color, size: 28),
+//               const SizedBox(height: 8),
+//               Text(
+//                 title,
+//                 textAlign: TextAlign.center,
+//                 style: const TextStyle(
+//                   fontSize: 13,
+//                   fontWeight: FontWeight.w600,
+//                   color: Color(0xFF334268),
+//                 ),
+//               ),
+//             ],
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+//
+//   // --- NEW WIDGET FOR EMERGENCY BUTTON ---
+//   Widget _emergencyCard() {
+//     return Card(
+//       elevation: 4,
+//       color: Colors.red.shade700,
+//       shadowColor: Colors.red.withOpacity(0.4),
+//       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+//       clipBehavior: Clip.antiAlias,
+//       child: InkWell(
+//         onTap: () {
+//           // Navigate to your emergency page
+//           Navigator.push(
+//             context,
+//             MaterialPageRoute(builder: (context) => const EmergencyPage()),
+//           );
+//
+//         },
+//         child: const Padding(
+//           padding: EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+//           child: Row(
+//             mainAxisAlignment: MainAxisAlignment.center,
+//             children: [
+//               Icon(Icons.sos_rounded, color: Colors.white, size: 28),
+//               SizedBox(width: 12),
+//               Text(
+//                 "EMERGENCY",
+//                 style: TextStyle(
+//                   fontSize: 20,
+//                   fontWeight: FontWeight.bold,
+//                   color: Colors.white,
+//                   letterSpacing: 1.2,
+//                 ),
+//               ),
+//             ],
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+// }
+
+
+
+
+
+
+
+
+
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:newsyncrotime/pages/emergency/emergency_page.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:simple_animations/simple_animations.dart'; // Correct import
 import '../../services/esp32_api_service.dart';
 import '../database/app_database.dart';
+import '../pages/announcement/announcement_page.dart';
 import '../pages/category/category_list_page.dart';
 import '../pages/category/create_category_page.dart';
+import '../pages/today_schedule_page.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -14,22 +1168,28 @@ class DashboardPage extends StatefulWidget {
   State<DashboardPage> createState() => _DashboardPageState();
 }
 
-class _DashboardPageState extends State<DashboardPage> {
+class _DashboardPageState extends State<DashboardPage> with TickerProviderStateMixin {
   bool espConnected = false;
-  // This 'time' variable will now be the main display time.
-  // We'll update it to show the next period's time.
   String time = "--:--";
-  String date = ""; // We can still keep the date from the ESP32
-  String nextPeriodInfo = "Loading..."; // For the small text below the time
+  String date = "";
+  String nextPeriodInfo = "Loading...";
   Timer? timer;
   bool hasSchedule = false;
 
   late final Future<Database> _dbFuture;
+  late AnimationController _animationController;
 
   @override
   void initState() {
     super.initState();
     _dbFuture = AppDB.instance.database;
+
+    // Animation controller for the time card's breathing effect
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+
     _init();
   }
 
@@ -45,10 +1205,9 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     _checkEsp();
-    // We still load the date and check connection periodically
     timer = Timer.periodic(const Duration(seconds: 3), (_) {
       _checkEsp();
-      _loadDateFromEsp(); // Changed to only load date, as time is handled by schedule
+      _loadDateFromEsp();
       _loadNextPeriod();
     });
   }
@@ -62,11 +1221,9 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _loadDateFromEsp() async {
     if (!espConnected) return;
-    // Just send the command. Don't use `await` on a `void` and don't assign the result.
     Esp32ApiService.getStatus();
   }
 
-  // This helper function will be called by the stream listener
   void _parseStatusAndUpdateUI(String statusString) {
     if (mounted) {
       final lines = statusString.split('\n');
@@ -83,7 +1240,6 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  // MODIFIED SECTION
   Future<void> _loadNextPeriod() async {
     final db = await _dbFuture;
     final now = TimeOfDay.now();
@@ -97,18 +1253,12 @@ class _DashboardPageState extends State<DashboardPage> {
     if (mounted) {
       setState(() {
         if (result.isEmpty) {
-          // If no more periods, revert to showing ESP time or a message
           time = "--:--";
           nextPeriodInfo = "No more periods today";
         } else {
           final periodTitle = result.first['title'];
           final periodTime = result.first['startTime'];
-
-          // *** THIS IS THE KEY CHANGE ***
-          // 1. Set the main time display to the next period's start time.
           time = periodTime;
-
-          // 2. Set the descriptive text for the banner below.
           nextPeriodInfo = "Next: $periodTitle";
         }
       });
@@ -118,30 +1268,35 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     timer?.cancel();
+    _animationController.dispose();
     super.dispose();
   }
 
-  // --- UI WIDGETS SECTION ---
+  // --- NEW AESTHETIC UI WIDGETS SECTION ---
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF4F7FC), // A light, clean background color
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const SizedBox(height: 16),
               _topBar(),
-              const SizedBox(height: 20),
-              // This card now correctly shows the next period's time in the large display.
+              const SizedBox(height: 24),
               _timeCard(),
-              const SizedBox(height: 20),
-              _scheduleButton(),
-              const SizedBox(height: 20),
-              _actionButtons(),
+              const SizedBox(height: 24),
+              _scheduleCard(),
+              const SizedBox(height: 16),
+              _actionCardGrid(),
+              const SizedBox(height: 16),
+              _manageSchedulesCard(), // The new manage schedules card
+              const SizedBox(height: 16), // Spacing
+              _emergencyCard(), // The emergency card
               const Spacer(),
-              _bottomNav(context),
+              // _bottomNav(context), // If you need this, uncomment it
             ],
           ),
         ),
@@ -154,18 +1309,32 @@ class _DashboardPageState extends State<DashboardPage> {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         const Text("Dashboard",
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+            style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF1A2552))),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: espConnected ? Colors.green : Colors.red,
+            color: espConnected ? Colors.green.shade400 : Colors.red.shade400,
             borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                  color: espConnected
+                      ? Colors.green.withOpacity(0.3)
+                      : Colors.red.withOpacity(0.3),
+                  blurRadius: 8,
+                  offset: const Offset(0, 4))
+            ],
           ),
           child: Row(
-            children: const [
-              Icon(Icons.wifi, color: Colors.white, size: 16),
-              SizedBox(width: 6),
-              Text("WiFi", style: TextStyle(color: Colors.white)),
+            children: [
+              Icon(espConnected ? Icons.wifi_rounded : Icons.wifi_off_rounded,
+                  color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Text(espConnected ? "Connected" : "Offline",
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w600)),
             ],
           ),
         )
@@ -173,122 +1342,300 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // The 'time' variable used here is now updated by _loadNextPeriod()
   Widget _timeCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.blue,
-        borderRadius: BorderRadius.circular(20),
-      ),
+    // This creates a "breathing" gradient animation for the background
+    final tween = MovieTween()
+      ..tween('begin', ColorTween(begin: Colors.blue.shade300, end: Colors.blue.shade400), duration: const Duration(seconds: 2))
+      ..tween('end', ColorTween(begin: Colors.purple.shade300, end: Colors.purple.shade400), duration: const Duration(seconds: 2));
+
+
+    return LoopAnimationBuilder<Movie>(
+      tween: tween,
+      duration: tween.duration,
+      builder: (context, value, child) {
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [value.get('begin'), value.get('end')],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.blue.withOpacity(0.25),
+                blurRadius: 15,
+                offset: const Offset(0, 8),
+              )
+            ],
+          ),
+          child: child,
+        );
+      },
       child: Column(
         children: [
-          Text(date, style: const TextStyle(color: Colors.white70)),
-          Text(time, // This now shows the next period's time
-              style: const TextStyle(
-                  fontSize: 48,
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold)),
-          const SizedBox(height: 10),
+          Text(date, style: const TextStyle(color: Colors.white70, fontSize: 16)),
+          const SizedBox(height: 8),
+          Text(
+            time,
+            style: const TextStyle(
+              fontSize: 64,
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              shadows: [
+                Shadow(
+                  color: Colors.black26,
+                  blurRadius: 10,
+                  offset: Offset(0, 4),
+                )
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.white24,
+              color: Colors.white.withOpacity(0.2),
               borderRadius: BorderRadius.circular(20),
             ),
-            child: Text(nextPeriodInfo, // This shows "Next: Period Name"
-                style: const TextStyle(color: Colors.white)),
+            child: Text(nextPeriodInfo,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500)),
           )
         ],
       ),
     );
   }
 
-  Widget _scheduleButton() {
-    return ElevatedButton(
-      onPressed: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-              builder: (_) =>
-              hasSchedule ? const CategoryListPage() : const CreateCategoryPage()),
-        );
-      },
-      style: ElevatedButton.styleFrom(
-        minimumSize: const Size(double.infinity, 50),
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(30)),
+
+  Widget _scheduleCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
       ),
-      child: Text(hasSchedule ? "View Schedules" : "Create Schedule"),
-    );
-  }
-
-  Widget _actionButtons() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      // children: [
-      //   _smallButton("Skip Bell", () {
-      //     Esp32ApiService.sendCommand({"action": "skip_next_bell"});
-      //   }),
-      //   _smallButton("Announcement", () {
-      //     Navigator.pushNamed(context, "/announcement");
-      //   }),
-      //   _smallButton("Manual Ring", () {
-      //     Esp32ApiService.sendCommand(
-      //         {"action": "manual_ring", "sound": "default"});
-      //   }),
-      // ],
-      children: [
-        _smallButton("Skip Bell", () async {
-          await Esp32ApiService.sendRaw(
-              "\$SKIP#"
+      clipBehavior: Clip.antiAlias, // InkWell ripple respects border
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => hasSchedule
+                  ? const TodaySchedulePage()
+                  : const CreateCategoryPage(),
+            ),
           );
-        }),
-
-        _smallButton("Announcement", () {
-          Navigator.pushNamed(context, "/announcement");
-        }),
-
-        _smallButton("Manual Ring", () async {
-          await Esp32ApiService.sendRaw(
-              "\$T,1#"
-          );
-        }),
-      ],
-
-    );
-  }
-
-  Widget _smallButton(String text, VoidCallback onTap) {
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: OutlinedButton(
-          onPressed: onTap,
-          child: Text(text, textAlign: TextAlign.center),
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Row(
+            children: [
+              Icon(
+                  hasSchedule
+                      ? Icons.list_alt_rounded
+                      : Icons.add_circle_outline_rounded,
+                  color: Theme.of(context).primaryColor,
+                  size: 32),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  hasSchedule ? "View Schedules" : "Create New Schedule",
+                  style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1A2552)),
+                ),
+              ),
+              const Icon(Icons.arrow_forward_ios_rounded,
+                  color: Colors.grey, size: 18),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _bottomNav(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceAround,
+  Widget _actionCardGrid() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        IconButton(icon: const Icon(Icons.home), onPressed: () {}),
-        IconButton(
-            icon: const Icon(Icons.calendar_today),
-            onPressed: () {
-              // today's schedule page
-            }),
-        IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () {
-              Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const CategoryListPage()));
-            }),
+        const Text(
+          "Quick Actions",
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1A2552),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            _smallActionCard(
+              "Skip Bell",
+              Icons.skip_next_rounded,
+              Colors.orange,
+                  () async {
+                await Esp32ApiService.sendRaw("\$SKIP#");
+              },
+            ),
+            const SizedBox(width: 12),
+            _smallActionCard(
+              "Announce",
+              Icons.campaign_rounded,
+              Colors.teal,
+                  () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const AnnouncementPage(),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(width: 12),
+            _smallActionCard(
+              "Manual Ring",
+              Icons.touch_app_rounded,
+              Colors.indigo,
+                  () async {
+                await Esp32ApiService.sendRaw("\$T,1#");
+              },
+            ),
+          ],
+        ),
       ],
+    );
+  }
+
+
+  Widget _smallActionCard(String title, IconData icon, Color color, VoidCallback onTap) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.grey.withOpacity(0.1),
+                blurRadius: 10,
+                offset: const Offset(0, 5),
+              ),
+            ],
+            border: Border.all(color: Colors.grey.shade200, width: 1),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: color, size: 28),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF334268),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- NEW WIDGET FOR EMERGENCY BUTTON ---
+  Widget _emergencyCard() {
+    return Card(
+      elevation: 4,
+      color: Colors.red.shade700,
+      shadowColor: Colors.red.withOpacity(0.4),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          // Navigate to your emergency page
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const EmergencyPage()),
+          );
+
+        },
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.sos_rounded, color: Colors.white, size: 28),
+              SizedBox(width: 12),
+              Text(
+                "EMERGENCY",
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- NEW WIDGET FOR MANAGING SCHEDULES ---
+  Widget _manageSchedulesCard() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const CategoryListPage()),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Row(
+            children: [
+              Icon(
+                Icons.settings_rounded,
+                color: Theme.of(context).primaryColor,
+                size: 32,
+              ),
+              const SizedBox(width: 16),
+              const Expanded(
+                child: Text(
+                  "Manage Schedules",
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1A2552),
+                  ),
+                ),
+              ),
+              const Icon(
+                Icons.arrow_forward_ios_rounded,
+                color: Colors.grey,
+                size: 18,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

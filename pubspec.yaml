@@ -43,6 +43,8 @@ dependencies:
   file_picker: ^10.2.4
   http: ^1.6.0
   wifi_iot: ^0.3.19+2
+  simple_animations: ^5.2.0
+  intl: ^0.20.2
 
 dev_dependencies:
   flutter_test:
