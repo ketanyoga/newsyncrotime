@@ -1281,28 +1281,32 @@ class _DashboardPageState extends State<DashboardPage> with TickerProviderStateM
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16.0),
-          child: Column(
-            children: [
-              const SizedBox(height: 16),
-              _topBar(),
-              const SizedBox(height: 24),
-              _timeCard(),
-              const SizedBox(height: 24),
-              _scheduleCard(),
-              const SizedBox(height: 16),
-              _actionCardGrid(),
-              const SizedBox(height: 16),
-              _manageSchedulesCard(), // The new manage schedules card
-              const SizedBox(height: 16), // Spacing
-              _emergencyCard(), // The emergency card
-              const Spacer(),
-              // _bottomNav(context), // If you need this, uncomment it
-            ],
+          // 1. Wrap the Column with a SingleChildScrollView
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                const SizedBox(height: 16),
+                _topBar(),
+                const SizedBox(height: 24),
+                _timeCard(),
+                const SizedBox(height: 24),
+                _scheduleCard(),
+                const SizedBox(height: 16),
+                _actionCardGrid(),
+                const SizedBox(height: 16),
+                _manageSchedulesCard(),
+                const SizedBox(height: 16),
+                _emergencyCard(),
+                // 2. Remove the Spacer() to allow the column to determine its own size
+                const SizedBox(height: 16), // Add some padding at the bottom
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+
 
   Widget _topBar() {
     return Row(
