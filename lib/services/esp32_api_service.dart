@@ -105,6 +105,8 @@ class Esp32ApiService {
     _socket = null;
   }
 
+
+
   // --- PUBLIC API ---
 
   /// Checks if a connection can be established.
