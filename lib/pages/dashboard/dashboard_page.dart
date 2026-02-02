@@ -794,6 +794,359 @@
 //   }
 // }
 
+// import 'package:flutter/material.dart';
+// import 'dart:async';
+// import '../../services/esp32_api_service.dart';
+// import '../../database/app_database.dart';
+//
+// class DashboardPage extends StatefulWidget {
+//   const DashboardPage({super.key});
+//
+//   @override
+//   State<DashboardPage> createState() => _DashboardPageState();
+// }
+//
+// class _DashboardPageState extends State<DashboardPage> {
+//   // UI + state
+//   String espResponse = "Press a button to get data.";
+//   String connectionStatus = "Disconnected";
+//   Color statusColor = Colors.red;
+//   bool isLoading = false;
+//   bool isSyncing = false;
+//
+//   final TextEditingController _commandController = TextEditingController();
+//   StreamSubscription? _socketSubscription;
+//
+//   @override
+//   void initState() {
+//     super.initState();
+//     _checkInitialStatus();
+//
+//     // Listen ESP32 responses
+//     _socketSubscription = Esp32ApiService.listen().listen((data) {
+//       if (mounted) {
+//         setState(() => espResponse = data);
+//       }
+//     }, onError: (error) {
+//       if (mounted) {
+//         setState(() {
+//           espResponse = "Stream Error: $error";
+//           statusColor = Colors.red;
+//           connectionStatus = "Error";
+//         });
+//       }
+//     });
+//   }
+//
+//   Future<void> _checkInitialStatus() async {
+//     setState(() => isLoading = true);
+//     final connected = await Esp32ApiService.checkConnection();
+//
+//     if (!mounted) return;
+//
+//     setState(() {
+//       isLoading = false;
+//       if (connected) {
+//         connectionStatus = "Connected";
+//         statusColor = Colors.green;
+//         espResponse = "ESP32 Connected. Ready for commands.";
+//       } else {
+//         connectionStatus = "Disconnected";
+//         statusColor = Colors.red;
+//         espResponse = "Connection Failed. Connect to 'SchoolBell_AP' WiFi.";
+//       }
+//     });
+//   }
+//
+//   // ================= TERMINAL COMMAND =================
+//   Future<void> _sendManualCommand() async {
+//     final cmd = _commandController.text.trim();
+//
+//     if (cmd.isEmpty) {
+//       _showSnack("Enter a command", Colors.orange);
+//       return;
+//     }
+//
+//     final connected = await Esp32ApiService.checkConnection();
+//     if (!connected) {
+//       _showSnack("ESP32 not connected", Colors.red);
+//       return;
+//     }
+//
+//     setState(() {
+//       isLoading = true;
+//       espResponse = ">> $cmd";
+//     });
+//
+//     await Esp32ApiService.sendRaw(cmd);
+//     _commandController.clear();
+//
+//     Future.delayed(const Duration(seconds: 1), () {
+//       if (mounted) setState(() => isLoading = false);
+//     });
+//   }
+//
+//   // ================= FULL SYNC =================
+//   Future<void> _syncFullSchedule() async {
+//     final connected = await Esp32ApiService.checkConnection();
+//     if (!connected) {
+//       _showSnack("Not connected to ESP32", Colors.red);
+//       return;
+//     }
+//
+//     setState(() {
+//       isSyncing = true;
+//       espResponse = "Reading schedule from database...";
+//     });
+//
+//     final db = await AppDB.instance.database;
+//
+//     try {
+//       const String currentMode = "SUMMER";
+//
+//       final periods = await db.query(
+//         'periods',
+//         orderBy: 'day, startTime',
+//       );
+//
+//       if (periods.isEmpty) {
+//         _showSnack("No schedule found", Colors.orange);
+//         setState(() {
+//           isSyncing = false;
+//           espResponse = "Nothing to send.";
+//         });
+//         return;
+//       }
+//
+//       final buffer = StringBuffer();
+//       int count = 0;
+//
+//       for (final p in periods) {
+//         final day = p['day'] as String?;
+//         final start = p['startTime'] as String?;
+//         final isBreak = p['isBreak'] as int? ?? 0;
+//         final title = p['title'] as String? ?? '';
+//         final ringtone = p['ringtone'] as String? ?? '';
+//
+//         if (day == null || start == null) continue;
+//
+//         final dayCode = _dayToCode(day);
+//         if (dayCode.isEmpty) continue;
+//
+//         final match = RegExp(r'Period\s*(\d+)').firstMatch(title);
+//         final slot = match != null ? int.tryParse(match.group(1)!) : null;
+//         if (slot == null || slot > 10) continue;
+//
+//         String time = start.contains(':')
+//             ? start
+//             : "${start.substring(0, 2)}:${start.substring(2)}";
+//
+//         int track = isBreak == 1 ? 3 : 1;
+//         final rMatch = RegExp(r'\d+').firstMatch(ringtone);
+//         if (rMatch != null) {
+//           track = int.parse(rMatch.group(0)!);
+//         }
+//
+//
+//         buffer.write("\$$currentMode,$dayCode$slot,$time,$track#");
+//         count++;
+//       }
+//
+//       await Esp32ApiService.sendRaw(buffer.toString());
+//
+//       setState(() => espResponse = "Sync complete ($count commands)");
+//       _showSnack("Schedule synced successfully", Colors.green);
+//
+//     } catch (e) {
+//       setState(() => espResponse = "Sync error: $e");
+//       _showSnack("Sync failed", Colors.red);
+//     } finally {
+//       if (mounted) setState(() => isSyncing = false);
+//     }
+//   }
+//
+//   String _dayToCode(String day) {
+//     const map = {
+//       'SUNDAY': 'U',
+//       'MONDAY': 'M',
+//       'TUESDAY': 'T',
+//       'WEDNESDAY': 'W',
+//       'THURSDAY': 'H',
+//       'FRIDAY': 'F',
+//       'SATURDAY': 'S',
+//     };
+//     return map[day.toUpperCase()] ?? '';
+//   }
+//
+//   Future<void> _getStatus() async {
+//     setState(() => isLoading = true);
+//     await Esp32ApiService.getStatus();
+//     Future.delayed(const Duration(seconds: 1), () {
+//       if (mounted) setState(() => isLoading = false);
+//     });
+//   }
+//
+//   Future<void> _sendTime() async {
+//     setState(() => isLoading = true);
+//
+//     final now = DateTime.now();
+//     final cmd =
+//         "\$R,${now.day.toString().padLeft(2, '0')}-${now.month.toString().padLeft(2, '0')}-${(now.year % 100)},"
+//         "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}#";
+//
+//     await Esp32ApiService.sendRaw(cmd);
+//
+//     Future.delayed(const Duration(seconds: 1), () {
+//       if (mounted) setState(() => isLoading = false);
+//     });
+//   }
+//
+//   void _showSnack(String msg, Color color) {
+//     ScaffoldMessenger.of(context)
+//         .showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
+//   }
+//
+//   @override
+//   void dispose() {
+//     _commandController.dispose();
+//     _socketSubscription?.cancel();
+//     Esp32ApiService.disconnect();
+//     super.dispose();
+//   }
+//
+//   // ================= UI =================
+//   @override
+//   Widget build(BuildContext context) {
+//     final isBusy = isLoading || isSyncing;
+//
+//     return Scaffold(
+//       appBar: AppBar(
+//         title: const Text("ESP32 Sync Dashboard"),
+//         actions: [
+//           Row(
+//             children: [
+//               Text(connectionStatus,
+//                   style: TextStyle(color: statusColor)),
+//               const SizedBox(width: 8),
+//               Icon(Icons.wifi, color: statusColor),
+//               const SizedBox(width: 16),
+//             ],
+//           )
+//         ],
+//       ),
+//       body: ListView(
+//         padding: const EdgeInsets.all(12),
+//         children: [
+//           _buildStatusCard(),
+//           const SizedBox(height: 16),
+//           _buildTerminalCard(isBusy),
+//           const SizedBox(height: 16),
+//           _buildSyncCard(isBusy),
+//           const SizedBox(height: 16),
+//           GridView.count(
+//             shrinkWrap: true,
+//             physics: const NeverScrollableScrollPhysics(),
+//             crossAxisCount: 2,
+//             children: [
+//               _buildAction("Get Status", Icons.info, _getStatus, isBusy),
+//               _buildAction("Send Time", Icons.access_time, _sendTime, isBusy),
+//             ],
+//           ),
+//         ],
+//       ),
+//     );
+//   }
+//
+//   Widget _buildTerminalCard(bool isBusy) {
+//     return Card(
+//       child: Padding(
+//         padding: const EdgeInsets.all(16),
+//         child: Column(
+//           children: [
+//             const Text("Send Command Terminal",
+//                 style: TextStyle(fontWeight: FontWeight.bold)),
+//             const SizedBox(height: 12),
+//             TextField(
+//               controller: _commandController,
+//               enabled: !isBusy,
+//               style: const TextStyle(fontFamily: 'monospace'),
+//               decoration: const InputDecoration(
+//                 hintText: r"$STATUS#",
+//                 border: OutlineInputBorder(),
+//               ),
+//               onSubmitted: (_) => _sendManualCommand(),
+//             ),
+//             const SizedBox(height: 10),
+//             ElevatedButton.icon(
+//               onPressed: isBusy ? null : _sendManualCommand,
+//               icon: const Icon(Icons.send),
+//               label: const Text("Send"),
+//             ),
+//           ],
+//         ),
+//       ),
+//     );
+//   }
+//
+//   Widget _buildSyncCard(bool isBusy) {
+//     return Card(
+//       color: Colors.green,
+//       child: ListTile(
+//         leading: isSyncing
+//             ? const CircularProgressIndicator(color: Colors.white)
+//             : const Icon(Icons.sync, color: Colors.white),
+//         title: const Text("Full Sync to ESP32",
+//             style: TextStyle(color: Colors.white)),
+//         onTap: isBusy ? null : _syncFullSchedule,
+//       ),
+//     );
+//   }
+//
+//   Widget _buildStatusCard() {
+//     return Card(
+//       child: Padding(
+//         padding: const EdgeInsets.all(16),
+//         child: SizedBox(
+//           height: 140,
+//           child: SingleChildScrollView(
+//             child: Text(espResponse,
+//                 style: const TextStyle(fontFamily: 'monospace')),
+//           ),
+//         ),
+//       ),
+//     );
+//   }
+//
+//   Widget _buildAction(
+//       String title, IconData icon, VoidCallback fn, bool isBusy) {
+//     return Card(
+//       child: InkWell(
+//         onTap: isBusy ? null : fn,
+//         child: Column(
+//           mainAxisAlignment: MainAxisAlignment.center,
+//           children: [
+//             Icon(icon, size: 36),
+//             const SizedBox(height: 8),
+//             Text(title),
+//           ],
+//         ),
+//       ),
+//     );
+//   }
+// }
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
 import 'package:flutter/material.dart';
 import 'dart:async';
 import '../../services/esp32_api_service.dart';
@@ -902,10 +1255,39 @@ class _DashboardPageState extends State<DashboardPage> {
     final db = await AppDB.instance.database;
 
     try {
-      const String currentMode = "SUMMER";
+      final now = DateTime.now();
+
+      Map<String, dynamic>? currentCat;
+      final cats = await db.query('categories', where: 'configured = 1');
+      for (var cat in cats) {
+        final startStr = cat['startDate'] as String?;
+        final endStr = cat['endDate'] as String?;
+        if (startStr != null && endStr != null) {
+          final start = DateTime.tryParse(startStr);
+          final end = DateTime.tryParse(endStr);
+          if (start != null && end != null && now.isAfter(start) && now.isBefore(end.add(const Duration(days: 1)))) {
+            currentCat = cat;
+            break;
+          }
+        }
+      }
+
+      if (currentCat == null) {
+        _showSnack("No active schedule for current date", Colors.orange);
+        setState(() {
+          isSyncing = false;
+          espResponse = "No active schedule.";
+        });
+        return;
+      }
+
+      final String currentMode = (currentCat['name'] as String).toUpperCase();
+      final int catId = currentCat['id'] as int;
 
       final periods = await db.query(
         'periods',
+        where: 'categoryId = ?',
+        whereArgs: [catId],
         orderBy: 'day, startTime',
       );
 
@@ -1134,16 +1516,3 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
