@@ -64,7 +64,7 @@ class _EmergencyPageState extends State<EmergencyPage> {
     });
   }
 
-
+  // --- MODIFIED ---
   /// Cancels the long press timer if the user releases their finger early.
   void _cancelLongPress() {
     _longPressTimer?.cancel();
@@ -73,7 +73,7 @@ class _EmergencyPageState extends State<EmergencyPage> {
     }
   }
 
-
+  // --- ADDED ---
   /// Handles a quick tap to turn the siren OFF.
   void _quickTap() {
     // A quick tap only happens if the long press timer is still active (i.e., not yet fired).
