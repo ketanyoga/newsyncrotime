@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-// Add this StatefulWidget class
 class EmergencyPage extends StatefulWidget {
   const EmergencyPage({super.key});
   @override
@@ -12,7 +11,7 @@ class EmergencyPage extends StatefulWidget {
 class _EmergencyPageState extends State<EmergencyPage> {
   static const String espIp = "192.168.4.1"; // Make sure this IP is correct
 
-  bool _sending = false;
+  bool _isSending = false;
   Timer? _longPressTimer;
   bool _isPressing = false;
 
@@ -22,58 +21,75 @@ class _EmergencyPageState extends State<EmergencyPage> {
     super.dispose();
   }
 
-  Future<void> _triggerEmergency() async {
-    // No longer checking for a locked state
-    setState(() => _sending = true);
+
+  /// Generic function to send a command to the ESP32.
+  Future<void> _sendCommand(String command, String successMessage) async {
+    // Prevent sending a new command while one is already in progress.
+    if (_isSending) return;
+
+    setState(() => _isSending = true);
 
     try {
-      // The HTTP post sends the "$E#" command as requested
       final res = await http.post(
         Uri.parse("http://$espIp/emergency/trigger"),
-        body: "\$E#", // Sending the specified command
-      );
+        body: command, // Send the specific command provided.
+      ).timeout(const Duration(seconds: 5)); // Add a timeout for robustness.
 
       if (res.statusCode == 200) {
-        _showMessage("🚨 Emergency Activated");
-        // You might want to prevent further triggers after one successful send
-        // For example: setState(() => _sending = true); // to lock the button
+        _showMessage(successMessage);
       } else {
         _showMessage("ESP32 error: Status code ${res.statusCode}", error: true);
       }
     } catch (e) {
       _showMessage("Failed to connect to ESP32: $e", error: true);
     } finally {
-      // If you want the button to be reusable, set _sending to false
-      // If not, you can leave it as true to "lock" it after sending.
-      setState(() => _sending = false);
+      // Ensure the UI is updated only if the widget is still mounted.
+      if (mounted) {
+        setState(() => _isSending = false);
+      }
     }
   }
 
+
+  /// Starts the timer for a long press to turn the siren ON.
   void _startLongPressTimer() {
-    // Do not start a new timer if a command is already being sent
-    if (_sending) return;
+    if (_isSending) return;
 
     setState(() => _isPressing = true);
 
-    // Timer waits for 3 seconds before executing the command
+    // After 3 seconds, send the 'ON' command.
     _longPressTimer = Timer(const Duration(seconds: 3), () {
-      _triggerEmergency();
-      _cancelLongPressTimer(); // Stop the timer and reset pressing state
+      _sendCommand("\$E,on#", "🚨 Emergency Activated");
+      _cancelLongPress(); // Reset the UI after the command is sent.
     });
   }
 
-  void _cancelLongPressTimer() {
+
+  /// Cancels the long press timer if the user releases their finger early.
+  void _cancelLongPress() {
     _longPressTimer?.cancel();
-    setState(() => _isPressing = false);
+    if (mounted) {
+      setState(() => _isPressing = false);
+    }
+  }
+
+
+  /// Handles a quick tap to turn the siren OFF.
+  void _quickTap() {
+    // A quick tap only happens if the long press timer is still active (i.e., not yet fired).
+    // This prevents the 'off' command from firing right after the 'on' command.
+    if (_longPressTimer?.isActive ?? false) {
+      _cancelLongPress(); // Cancel the long press 'on' action.
+      _sendCommand("\$E,off#", "✅ Emergency Deactivated");
+    }
   }
 
   void _showMessage(String msg, {bool error = false}) {
-    // Ensure the widget is still in the tree before showing a SnackBar
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
-        backgroundColor: error ? Colors.red : Colors.green,
+        backgroundColor: error ? Colors.green : Theme.of(context).colorScheme.primary,
       ),
     );
   }
@@ -89,16 +105,16 @@ class _EmergencyPageState extends State<EmergencyPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            // --- MODIFIED GestureDetector ---
             GestureDetector(
-              onTapDown: (_) => _startLongPressTimer(),
-              onTapUp: (_) => _cancelLongPressTimer(),
-              onTapCancel: _cancelLongPressTimer,
+              onTapDown: (_) => _startLongPressTimer(), // Start the timer on press down
+              onTapUp: (_) => _quickTap(), // A quick release triggers the 'off' command
+              onTapCancel: _cancelLongPress, // Also cancel if the gesture is interrupted
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 300),
                 width: 220,
                 height: 220,
                 decoration: BoxDecoration(
-                  // The button is always red now
                   color: Colors.red,
                   shape: BoxShape.circle,
                   boxShadow: [
@@ -111,7 +127,7 @@ class _EmergencyPageState extends State<EmergencyPage> {
                   ],
                 ),
                 child: Center(
-                  child: _sending
+                  child: _isSending
                       ? const CircularProgressIndicator(
                     color: Colors.white,
                   )
@@ -119,7 +135,7 @@ class _EmergencyPageState extends State<EmergencyPage> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        Icons.notifications, // Bell Icon
+                        Icons.notifications_active, // Bell Icon
                         color: Colors.white,
                         size: 60,
                       ),
@@ -137,11 +153,15 @@ class _EmergencyPageState extends State<EmergencyPage> {
                 ),
               ),
             ),
-            const SizedBox(height: 24),
-            const Text(
-              "Press and hold for 3 seconds in case of emergency.",
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14),
+            const SizedBox(height: 40),
+            // --- MODIFIED Text ---
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 32.0),
+              child: Text(
+                "PRESS & HOLD for 3 seconds to ACTIVATE siren.\n\nQUICK TAP to DEACTIVATE.",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, height: 1.5),
+              ),
             )
           ],
         ),

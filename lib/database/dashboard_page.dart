@@ -1483,7 +1483,7 @@ class _DashboardPageState extends State<DashboardPage> with TickerProviderStateM
               Icons.skip_next_rounded,
               Colors.orange,
                   () async {
-                await Esp32ApiService.sendRaw("\$SKIP#");
+                await Esp32ApiService.sendRaw("\$S#");
               },
             ),
             const SizedBox(width: 12),
@@ -1506,7 +1506,7 @@ class _DashboardPageState extends State<DashboardPage> with TickerProviderStateM
               Icons.touch_app_rounded,
               Colors.indigo,
                   () async {
-                await Esp32ApiService.sendRaw("\$T,1#");
+                await Esp32ApiService.sendRaw("\$MR#");
               },
             ),
           ],
