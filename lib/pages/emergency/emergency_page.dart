@@ -120,8 +120,8 @@ class _EmergencyPageState extends State<EmergencyPage> {
                   boxShadow: [
                     BoxShadow(
                       color: _isPressing
-                          ? Colors.red.withOpacity(0.9)
-                          : Colors.red.withOpacity(0.5),
+                          ? const Color.fromRGBO(255, 0, 0, 0.9)
+                          : const Color.fromRGBO(255, 0, 0, 0.5),
                       blurRadius: _isPressing ? 50 : 30,
                     )
                   ],
