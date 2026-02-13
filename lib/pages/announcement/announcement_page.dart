@@ -1,7 +1,9 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/material.dart';
+
 import 'package:file_picker/file_picker.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter/material.dart';
 
 class AnnouncementPage extends StatefulWidget {
   const AnnouncementPage({super.key});
@@ -16,6 +18,7 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
 
   static const int maxSizeBytes = 2 * 1024 * 1024; // 2MB
   static const String espIp = "192.168.4.1";
+  static const int espPort = 23;
 
   Future<void> _pickMp3() async {
     final result = await FilePicker.platform.pickFiles(
@@ -42,27 +45,52 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
     setState(() => _uploading = true);
 
     try {
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse("http://$espIp/announcement"),
+      final bytes = await _selectedFile!.readAsBytes();
+      final fileName = "announcement.mp3";
+
+      final socket = await Socket.connect(
+        espIp,
+        espPort,
+        timeout: const Duration(seconds: 10),
       );
 
-      request.files.add(
-        await http.MultipartFile.fromPath(
-          'file',
-          _selectedFile!.path,
-        ),
-      );
+      // 1️⃣ Send FILE header
+      socket.add(utf8.encode('\$FILE,$fileName,${bytes.length}#'));
+      await socket.flush();
 
-      final response = await request.send();
+      // 2️⃣ Wait for READY
+      final ready = await utf8.decoder
+          .bind(socket)
+          .firstWhere((msg) => msg.contains('READY, SEND'));
 
-      if (response.statusCode == 200) {
-        _showSuccess("Announcement played successfully");
-      } else {
-        _showError("ESP32 error while playing announcement");
+      if (!ready.contains('READY')) {
+        socket.destroy();
+        throw Exception("ESP32 not ready");
       }
+
+      // 3️⃣ Send binary MP3 (NO delays)
+      socket.add(bytes);
+      await socket.flush();
+
+      // 4️⃣ Wait for SUCCESS
+      final success = await utf8.decoder
+          .bind(socket)
+          .firstWhere((msg) => msg.contains('SUCCESS'));
+
+      if (!success.contains('SUCCESS')) {
+        socket.destroy();
+        throw Exception("Upload failed");
+      }
+
+      // 5️⃣ Play immediately
+      socket.add(utf8.encode('\$T,$fileName#'));
+      await socket.flush();
+
+      socket.destroy();
+
+      _showSuccess("Announcement played successfully");
     } catch (e) {
-      _showError("Failed to connect to ESP32");
+      _showError("Failed to send announcement: $e");
     } finally {
       setState(() => _uploading = false);
     }
@@ -85,7 +113,6 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Announcement"),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -140,8 +167,10 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                 minimumSize: const Size(double.infinity, 56),
                 backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
-                textStyle:
-                const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                textStyle: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             )
           ],
