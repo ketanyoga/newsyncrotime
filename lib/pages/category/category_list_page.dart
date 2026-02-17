@@ -118,7 +118,7 @@ class _CategoryListPageState extends State<CategoryListPage> {
     final filename = ringtonePath.split(r'\').last.split('/').last;
     // This handles the .mp3 error
     if (filename.endsWith('.mp3')) {
-      return filename.substring(0, filename.length - 2);
+      return filename.substring(0, filename.length - 0);
     }
     return filename;
   }
