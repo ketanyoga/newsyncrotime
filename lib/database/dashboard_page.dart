@@ -2125,7 +2125,6 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  bool espConnected = false;
   String time = "--:--";
   String date = "";
   String nextPeriodInfo = "Loading...";
@@ -2155,18 +2154,18 @@ class _DashboardPageState extends State<DashboardPage> {
       });
     }
 
-    _checkEsp();
-    // Modified Timer: Removed the call to _loadDateFromEsp
-    timer = Timer.periodic(const Duration(seconds: 3), (_) {
-      _checkEsp();
-      _loadNextPeriod();
-    });
+    // _checkEsp();
+    // // Modified Timer: Removed the call to _loadDateFromEsp
+    // timer = Timer.periodic(const Duration(seconds: 3), (_) {
+    //   _checkEsp();
+    //   _loadNextPeriod();
+    // });
   }
 
-  Future<void> _checkEsp() async {
-    final connected = await Esp32ApiService.checkConnection();
-    if (mounted) setState(() => espConnected = connected);
-  }
+  // Future<void> _checkEsp() async {
+  //   final connected = await Esp32ApiService.checkConnection();
+  //   if (mounted) setState(() => espConnected = connected);
+  // }
 
   // REMOVED: The _loadDateFromEsp function has been deleted as it sent the status.
   // Future<void> _loadDateFromEsp() async {
@@ -2249,37 +2248,7 @@ class _DashboardPageState extends State<DashboardPage> {
             color: Colors.black,
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          decoration: BoxDecoration(
-            color: espConnected
-                ? const Color(0xFFDFF5E3)
-                : const Color(0xFFFCE4E4),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                espConnected ? Icons.wifi : Icons.wifi_off,
-                size: 16,
-                color: espConnected
-                    ? const Color(0xFF2E7D32)
-                    : const Color(0xFFC62828),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                espConnected ? "Connected" : "Offline",
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: espConnected
-                      ? const Color(0xFF2E7D32)
-                      : const Color(0xFFC62828),
-                ),
-              ),
-            ],
-          ),
-        )
+
       ],
     );
   }

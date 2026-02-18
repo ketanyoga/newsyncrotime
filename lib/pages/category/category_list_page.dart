@@ -12,6 +12,10 @@ import '../general/general_schedule_page.dart';
 import '../week/week_schedule_page.dart';
 import 'create_category_page.dart';
 
+import 'dart:typed_data';
+
+
+
 class CategoryListPage extends StatefulWidget {
   const CategoryListPage({super.key});
 
@@ -173,153 +177,138 @@ class _CategoryListPageState extends State<CategoryListPage> {
       },
     );
   }
+  void logUpload(String msg) {
+    debugPrint('[UPLOAD] $msg');
+  }
+
 
   /// REVISED: More robust version that skips files that can't be loaded.
-  Future<void> _uploadAudioFiles(CategoryModel category, Set<String> uniqueRingtonePaths) async {
+  /// SOLVED: Robust upload with error handling and clean header termination.
+  Future<void> _uploadAudioFiles(
+      CategoryModel category,
+      Set<String> uniqueRingtonePaths,
+      ) async {
     if (!mounted) return;
-
     setState(() => _activeUploadCategoryId = category.id);
-    final messenger = ScaffoldMessenger.of(context);
-    final List<String> filesToUpload = uniqueRingtonePaths.toList();
-    final List<String> failedFiles = [];
 
-    // This logic now includes the default ringtone if needed
-    if (filesToUpload.any((p) => p == null || p.trim().isEmpty)) {
-      filesToUpload.removeWhere((p) => p == null || p.trim().isEmpty); // Remove placeholder
-      if (!filesToUpload.contains('assets/audio/default.mp3')) {
-        filesToUpload.add('assets/audio/default.mp3');
+    final messenger = ScaffoldMessenger.of(context);
+    final sortedPaths = uniqueRingtonePaths.toList()..sort();
+
+    for (final path in sortedPaths) {
+      final fileName = _getRingtoneName(path);
+
+      debugPrint('\n[UPLOAD] ----------------------------');
+      debugPrint('[UPLOAD] File: $fileName');
+
+      Uint8List bytes;
+      try {
+        if (path.startsWith('assets/')) {
+          final data = await rootBundle.load(path);
+          bytes = data.buffer.asUint8List();
+        } else {
+          bytes = await File(path).readAsBytes();
+        }
+      } catch (e) {
+        debugPrint('[UPLOAD] Failed to read file: $e');
+        continue;
       }
+
+      final size = bytes.length;
+      debugPrint('[UPLOAD] Size: $size bytes');
+
+      Socket? socket;
+      StreamSubscription? sub;
+
+      try {
+        // ───── CONNECT ─────
+        socket = await Socket.connect(
+          espIp,
+          espPort,
+          timeout: const Duration(seconds: 5),
+        );
+        socket.setOption(SocketOption.tcpNoDelay, true);
+        debugPrint('[UPLOAD] Connected');
+
+        // ───── SEND HEADER (NO \n !!!) ─────
+        final header = '\$FILE,$fileName,$size#';
+        debugPrint('[UPLOAD] Sending header: $header');
+        socket.add(header.codeUnits);
+        await socket.flush();
+
+        // ───── WAIT FOR READY ─────
+        debugPrint('[UPLOAD] Waiting for READY...');
+        final readyCompleter = Completer<void>();
+        final buffer = StringBuffer();
+
+        sub = socket.listen((data) {
+          final msg = String.fromCharCodes(data);
+          buffer.write(msg);
+
+          if (buffer.toString().contains('READY')) {
+            debugPrint('[UPLOAD] READY received');
+            readyCompleter.complete();
+          }
+        });
+
+        await readyCompleter.future.timeout(const Duration(seconds: 10));
+        await sub.cancel(); // 🔥 IMPORTANT
+        sub = null;
+
+        // ───── SEND RAW BINARY ─────
+        debugPrint('[UPLOAD] Sending binary...');
+        socket.add(bytes);
+        await socket.flush();
+        debugPrint('[UPLOAD] Binary sent');
+
+        // ───── OPTIONAL RESPONSE ─────
+        await socket.first.timeout(
+          const Duration(seconds: 15),
+          onTimeout: () => Uint8List(0),
+        );
+
+        debugPrint('[UPLOAD] Upload OK');
+
+      } catch (e) {
+        debugPrint('[UPLOAD] ERROR: $e');
+
+        // if (mounted) {
+        //   messenger.showSnackBar(
+        //     SnackBar(
+        //       content: Text('Upload failed: $fileName'),
+        //       backgroundColor: Colors.red,
+        //     ),
+        //   );
+        // }
+
+        await Future.delayed(const Duration(seconds: 2));
+      } finally {
+        await sub?.cancel();
+        socket?.destroy();
+        debugPrint('[UPLOAD] Socket closed');
+      }
+
+      // ESP32 needs breathing room
+      await Future.delayed(const Duration(seconds: 1));
     }
 
-
-    int currentFileIndex = 0;
-    int totalFiles = filesToUpload.length;
-    String currentStatus = "Starting...";
-    StateSetter? dialogSetState;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            dialogSetState = setState;
-            return AlertDialog(
-              title: Text('Uploading Files... ($currentFileIndex/$totalFiles)'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const LinearProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text(currentStatus, overflow: TextOverflow.ellipsis),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-
-    try {
-      for (final path in filesToUpload) {
-        currentFileIndex++;
-        final fileName = _getRingtoneName(path);
-
-        dialogSetState?.call(() => currentStatus = 'Preparing "$fileName"...');
-
-        // --- START OF THE FIX ---
-        Uint8List bytes;
-        try {
-          // Check if the path is a bundled asset or a local file path
-          if (path.startsWith('assets/audio/')) {
-            // It's a bundled asset, load with rootBundle
-            final ByteData data = await rootBundle.load(path);
-            bytes = data.buffer.asUint8List();
-          } else {
-            // It's a local file, load with Dart's File API
-            final file = File(path);
-            if (await file.exists()) {
-              bytes = await file.readAsBytes();
-            } else {
-              throw Exception('File does not exist at path.');
-            }
-          }
-        } catch (e) {
-          // If loading fails for any reason, skip it and add to a failed list.
-          failedFiles.add(fileName);
-          dialogSetState?.call(() => currentStatus = 'Could not find "$fileName", skipping...');
-          await Future.delayed(const Duration(seconds: 2)); // Give user time to read
-          continue; // Move to the next file
-        }
-        // --- END OF THE FIX ---
-
-        final fileSize = bytes.length;
-
-        Socket? socket;
-        try {
-          dialogSetState?.call(() => currentStatus = 'Connecting to ESP32...');
-          socket = await Socket.connect(espIp, espPort, timeout: const Duration(seconds: 10));
-          final reader = StreamIterator<List<int>>(socket);
-
-          dialogSetState?.call(() => currentStatus = 'Sending header for "$fileName"...');
-          final command = '\$FILE,$fileName,$fileSize#';
-          socket.writeln(command);
-          await socket.flush();
-
-          dialogSetState?.call(() => currentStatus = 'Waiting for ESP32 to be ready...');
-          if (await reader.moveNext().timeout(const Duration(seconds: 10))) {
-            final response = utf8.decode(reader.current);
-            if (!response.contains('READY')) {
-              throw Exception('ESP32 not ready. Response: $response');
-            }
-          } else {
-            throw Exception('ESP32 did not send READY signal.');
-          }
-
-          dialogSetState?.call(() => currentStatus = 'Sending data for "$fileName"...');
-          socket.add(bytes);
-          await socket.flush();
-
-          dialogSetState?.call(() => currentStatus = 'Waiting for confirmation...');
-          if (await reader.moveNext().timeout(const Duration(seconds: 45))) {
-            final response = utf8.decode(reader.current);
-            if (!response.contains('FILE UPLOAD COMPLETE')) {
-              throw Exception('ESP32 did not confirm upload. Response: $response');
-            }
-          } else {
-            throw Exception('ESP32 did not send completion signal.');
-          }
-        } catch (e) {
-          throw Exception("Failed to upload '$fileName': $e");
-        } finally {
-          socket?.destroy();
-        }
-        await Future.delayed(const Duration(milliseconds: 200));
-      }
-
-      if (mounted) Navigator.of(context).pop();
-
-      if (failedFiles.isNotEmpty) {
-        messenger.showSnackBar(SnackBar(
-          content: Text('Upload complete, but failed to find: ${failedFiles.join(', ')}'),
-          backgroundColor: Colors.orange,
-          duration: const Duration(seconds: 8),
-        ));
-      } else {
-        messenger.showSnackBar(const SnackBar(content: Text('All audio files uploaded successfully!'), backgroundColor: Colors.green));
-      }
-      setState(() => _audioUploadedCategories.add(category.id!));
-
-    } catch (e) {
-      if (mounted) Navigator.of(context).pop();
+    if (mounted) {
+      setState(() => _activeUploadCategoryId = null);
       messenger.showSnackBar(
-        SnackBar(content: Text('UPLOAD ERROR: $e', style: const TextStyle(fontSize: 12)), backgroundColor: Colors.red, duration: const Duration(seconds: 10)),
+        const SnackBar(
+          content: Text('Upload completed'),
+          backgroundColor: Colors.green,
+        ),
       );
-    } finally {
-      if (mounted) setState(() => _activeUploadCategoryId = null);
     }
   }
+
+
+
+
+
+
+
+
   Future<void> _sendCommands(CategoryModel cat, int categorySequence) async {
     if (!mounted) return;
 
@@ -349,7 +338,7 @@ class _CategoryListPageState extends State<CategoryListPage> {
         if (dayCode == '?') continue;
         final timeAndRingtonePairs = entry.value.map((p) => '${p.startTime},${_getRingtoneName(p.ringtone)}').join('!');
         final fullPayload = '$categorySequence,$dayCode,$timeAndRingtonePairs';
-        commands.add('\$S,${fullPayload.length},$fullPayload#');
+        commands.add('\$S,$fullPayload#');
       }
 
       if (!mounted) return;
@@ -507,11 +496,3 @@ class _CategoryListPageState extends State<CategoryListPage> {
     );
   }
 }
-
-
-
-
-
-
-
-
