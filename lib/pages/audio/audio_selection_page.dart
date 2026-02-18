@@ -2,17 +2,17 @@ import 'dart:convert';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show rootBundle, AssetManifest;
 
 class RingtoneSelectionPage extends StatefulWidget {
   final bool selectSingle;
   const RingtoneSelectionPage({super.key, this.selectSingle = false});
 
   @override
-  _RingtoneSelectionPageState createState() => _RingtoneSelectionPageState();
+  RingtoneSelectionPageState createState() => RingtoneSelectionPageState();
 }
 
-class _RingtoneSelectionPageState extends State<RingtoneSelectionPage> {
+class RingtoneSelectionPageState extends State<RingtoneSelectionPage> {
   final AudioPlayer _audioPlayer = AudioPlayer();
 
   List<String> _ringtones = [];
@@ -37,38 +37,34 @@ class _RingtoneSelectionPageState extends State<RingtoneSelectionPage> {
   Future<void> _loadAssetRingtones() async {
     try {
       debugPrint("Starting to load asset ringtones...");
-      final manifestContent = await rootBundle.loadString('AssetManifest.json');
-      final Map<String, dynamic> manifestMap = json.decode(manifestContent);
 
-      debugPrint("--- All Keys in AssetManifest.json ---");
-      // FIX: Replaced forEach with a for-in loop for better readability and safety.
-      for (final key in manifestMap.keys) {
-        debugPrint(key);
-      }
-      debugPrint("------------------------------------");
+      final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+      final allAssets = manifest.listAssets();
 
-      final audioAssetPaths = manifestMap.keys
-          .where((String key) => key.startsWith('assets/audio/'))
+      final audioAssetPaths = allAssets
+          .where((path) => path.startsWith('assets/audio/'))
           .toList();
 
       debugPrint("Found ${audioAssetPaths.length} audio assets.");
+      for (final path in audioAssetPaths) {
+        debugPrint(path);
+      }
 
-      if (mounted) {
-        setState(() {
-          _ringtones = audioAssetPaths;
-          if (_ringtones.isNotEmpty && widget.selectSingle) {
-            _selectedRingtone = _ringtones.first;
-          }
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _ringtones = audioAssetPaths;
+        if (_ringtones.isNotEmpty && widget.selectSingle) {
+          _selectedRingtone = _ringtones.first;
+        }
+        _isLoading = false;
+      });
+    } catch (e, stack) {
       debugPrint("Error loading asset ringtones: $e");
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      debugPrintStack(stackTrace: stack);
+
+      if (!mounted) return;
+      setState(() => _isLoading = false);
     }
   }
 
