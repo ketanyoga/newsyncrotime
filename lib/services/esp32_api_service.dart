@@ -1,116 +1,111 @@
-// import 'dart:convert';
-// import 'package:http/http.dart' as http;
-//
-// class Esp32ApiService {
-//   static const String espIp = "192.168.4.1"; // ESP32 AP IP
-//   static const String baseUrl = "http://$espIp";
-//
-//   static Future<bool> checkConnection() async {
-//     try {
-//       final res = await http
-//           .get(Uri.parse("$baseUrl/ping"))
-//           .timeout(const Duration(seconds: 2));
-//       return res.statusCode == 200;
-//     } catch (_) {
-//       return false;
-//     }
-//   }
-//
-//   static Future<Map<String, dynamic>?> getTime() async {
-//     try {
-//       final res = await http.get(Uri.parse("$baseUrl/time"));
-//       if (res.statusCode == 200) {
-//         return jsonDecode(res.body);
-//       }
-//     } catch (_) {}
-//     return null;
-//   }
-//
-//   static Future<void> sendCommand(Map<String, dynamic> data) async {
-//     await http.post(
-//       Uri.parse("$baseUrl/command"),
-//       headers: {"Content-Type": "application/json"},
-//       body: jsonEncode(data),
-//     );
-//   }
-// }
-
-
-
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 
 class Esp32ApiService {
   static const String espIp = "192.168.4.1";
-  static const int tcpPort = 23; // Use the correct port for your ESP32 firmware.
+  static const int tcpPort = 23; 
 
   static Socket? _socket;
   static bool _isConnected = false;
+  static Completer<void>? _connectionCompleter;
 
-  // Use a broadcast StreamController to allow multiple listeners if needed.
   static final StreamController<String> _socketResponseController =
-  StreamController<String>.broadcast();
+      StreamController<String>.broadcast();
+
+  static final StreamController<bool> _connectionStateController =
+      StreamController<bool>.broadcast();
+
+  static Stream<bool> get connectionStateStream =>
+      _connectionStateController.stream;
 
   // --- PRIVATE METHODS ---
 
-  /// Ensures a connection is established. Connects if not already connected.
   static Future<void> _ensureConnection() async {
     if (_isConnected && _socket != null) {
       return;
     }
 
+    if (_connectionCompleter != null) {
+      debugPrint("Connection attempt already in progress. Awaiting existing completer...");
+      await _connectionCompleter!.future;
+      return;
+    }
+
+    _connectionCompleter = Completer<void>();
+
     try {
+      debugPrint("Connecting to SyncroBell device at $espIp:$tcpPort...");
+      await _closeConnectionSilently();
+
       _socket = await Socket.connect(
         espIp,
         tcpPort,
-        timeout: const Duration(seconds: 5),
+        timeout: const Duration(seconds: 3),
       );
 
       _isConnected = true;
+      _connectionStateController.add(true);
+      debugPrint("Connected to SyncroBell device.");
 
-      // Listen to the socket and add incoming data to our stream.
       _socket!.listen(
-            (data) {
-          final response = utf8.decode(data).trim();
-          if (response.isNotEmpty) {
-            _socketResponseController.add(response);
+        (data) {
+          try {
+            final response = utf8.decode(data).trim();
+            if (response.isNotEmpty) {
+              debugPrint("SyncroBell Response: $response");
+              _socketResponseController.add(response);
+            }
+          } catch (e) {
+            // Handle cases where data might not be valid UTF8 (e.g. binary echoes)
+            debugPrint("Received non-UTF8 data from SyncroBell");
           }
         },
         onError: (error) {
+          debugPrint("Socket Error: $error");
           _socketResponseController.addError(error);
           _closeConnection();
         },
         onDone: () {
+          debugPrint("Socket Done (Disconnected)");
           _closeConnection();
         },
         cancelOnError: true,
       );
     } catch (e) {
-      _socketResponseController.addError(e); // Notify listeners of the connection error
-      _closeConnection();
-      // Rethrow the exception so the calling function knows the connection failed.
-      throw Exception("Failed to connect to ESP32: $e");
+      debugPrint("Connection failed: $e");
+      await _closeConnection();
+      throw Exception("Unable to connect to SyncroBell device. Please check your Wi-Fi settings.");
+    } finally {
+      _connectionCompleter?.complete();
+      _connectionCompleter = null;
     }
   }
 
-  /// Closes the connection and resets the state.
-  static Future<void> _closeConnection() async {
-    _isConnected = false;
+  static Future<void> _closeConnectionSilently() async {
     try {
       await _socket?.close();
-    } catch (_) {
-      // Ignore errors on close
-    }
+      _socket?.destroy();
+    } catch (_) {}
     _socket = null;
   }
 
-
+  static Future<void> _closeConnection() async {
+    final bool wasConnected = _isConnected;
+    _isConnected = false;
+    await _closeConnectionSilently();
+    if (wasConnected) {
+      _connectionStateController.add(false);
+    }
+  }
 
   // --- PUBLIC API ---
 
-  /// Checks if a connection can be established.
   static Future<bool> checkConnection() async {
+    if (_isConnected && _socket != null) {
+      return true;
+    }
     try {
       await _ensureConnection();
       return _isConnected;
@@ -119,26 +114,92 @@ class Esp32ApiService {
     }
   }
 
-  /// Exposes the stream of responses for the UI to listen to.
+  static bool get isConnected => _isConnected && _socket != null;
+
   static Stream<String> listen() {
     return _socketResponseController.stream;
   }
 
-  /// Sends a raw command string. The command should NOT include the '#' or newline.
+  /// Sends a raw command string. 
+  /// The command should include the '#' terminator if required by the firmware.
   static Future<void> sendRaw(String command) async {
-    // This now throws an exception on failure, which can be caught in the UI.
-    await _ensureConnection();
-    // The ESP32 firmware expects commands to be terminated by a newline.
-    _socket!.writeln("$command");
-    await _socket!.flush();
+    try {
+      await _ensureConnection();
+      debugPrint("Sending Command: $command");
+      _socket!.writeln(command);
+      await _socket!.flush();
+    } catch (e) {
+      debugPrint("Error sending raw command ($command): $e");
+      await _closeConnection();
+      rethrow;
+    }
   }
 
-  /// A specific helper function to send the '$STATUS#' command.
+  /// Sends binary data (bytes) to the ESP32.
+  static Future<void> sendBytes(List<int> bytes) async {
+    try {
+      await _ensureConnection();
+      debugPrint("Sending ${bytes.length} bytes...");
+      _socket!.add(bytes);
+      await _socket!.flush();
+    } catch (e) {
+      debugPrint("Error sending bytes: $e");
+      await _closeConnection();
+      rethrow;
+    }
+  }
+
+  /// Waits for any of the specified triggers to appear in the response stream.
+  static Future<String> waitForAnyResponse(
+    List<String> triggers, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final completer = Completer<String>();
+
+    StreamSubscription<String>? sub;
+    Timer? timer;
+
+    timer = Timer(timeout, () {
+      sub?.cancel();
+      if (!completer.isCompleted) {
+        completer.completeError(
+          TimeoutException("Timed out waiting for any of $triggers"),
+        );
+      }
+    });
+
+    sub = listen().listen((msg) {
+      for (final trigger in triggers) {
+        if (msg.contains(trigger)) {
+          timer?.cancel();
+          sub?.cancel();
+          if (!completer.isCompleted) {
+            completer.complete(msg);
+          }
+          break;
+        }
+      }
+    });
+
+    return completer.future;
+  }
+
+  /// Waits for a specific string to appear in the response stream.
+  static Future<String> waitForResponse(
+    String trigger, {
+    Duration timeout = const Duration(seconds: 10),
+  }) {
+    return waitForAnyResponse([trigger], timeout: timeout);
+  }
+
+  /// Triggers the playback of a specific file on the device ($T command).
+  static Future<void> playFile(String filename) async {
+    await sendRaw("\$T,$filename#");
+  }
+
   static Future<void> getStatus() async {
     await sendRaw("\$STATUS#");
   }
 
-  /// Closes the socket connection.
   static Future<void> disconnect() => _closeConnection();
 }
-

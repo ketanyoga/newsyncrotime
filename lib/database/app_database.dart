@@ -17,7 +17,7 @@ class AppDB {
     final path = join(await getDatabasesPath(), 'schedule.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 5,
       onCreate: (db, _) async {
         await db.execute('''
         CREATE TABLE categories (
@@ -26,7 +26,12 @@ class AppDB {
           color INTEGER,
           startDate TEXT,
           endDate TEXT,
-          configured INTEGER
+          configured INTEGER,
+          ringtoneDuration INTEGER,
+          synced INTEGER DEFAULT 0,
+          skippedDays TEXT,
+          skippedDates TEXT,
+          scheduleConfig TEXT
         )
         ''');
 
@@ -44,6 +49,32 @@ class AppDB {
         )
         ''');
       },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE categories ADD COLUMN ringtoneDuration INTEGER DEFAULT 60');
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE categories ADD COLUMN synced INTEGER DEFAULT 0');
+        }
+        if (oldVersion < 4) {
+          await db.execute('ALTER TABLE categories ADD COLUMN skippedDays TEXT');
+          await db.execute('ALTER TABLE categories ADD COLUMN skippedDates TEXT');
+        }
+        if (oldVersion < 5) {
+          await db.execute('ALTER TABLE categories ADD COLUMN scheduleConfig TEXT');
+        }
+      },
     );
+  }
+
+  Future<void> cleanDuplicatePeriods() async {
+    final db = await database;
+    try {
+      await db.rawQuery('''
+        DELETE FROM periods WHERE id NOT IN (
+          SELECT MIN(id) FROM periods GROUP BY categoryId, UPPER(day), startTime
+        )
+      ''');
+    } catch (_) {}
   }
 }

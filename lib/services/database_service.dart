@@ -11,7 +11,7 @@ class DatabaseService {
   }
 
   static Future<Database> _initDb() async {
-    final path = join(await getDatabasesPath(), "newsyncrotime.db");
+    final path = join(await getDatabasesPath(), "syncrobell.db");
     return openDatabase(
       path,
       version: 1,

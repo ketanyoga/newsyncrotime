@@ -1,1138 +1,874 @@
-// // import 'package:flutter/material.dart';
-// // import 'package:path/path.dart' as p; // Import path package
-// // import 'dart:async';
-// // import '../../services/esp32_api_service.dart';
-// // import '../../database/app_database.dart';
-// //
-// //
-// // class DashboardPage extends StatefulWidget {
-// //   const DashboardPage({super.key});
-// //
-// //   @override
-// //   State<DashboardPage> createState() => _DashboardPageState();
-// // }
-// //
-// // class _DashboardPageState extends State<DashboardPage> {
-// //   // State variables to manage UI and data
-// //   String espResponse = "Press a button to get data.";
-// //   String connectionStatus = "Disconnected";
-// //   Color statusColor = Colors.red;
-// //   bool isLoading = false;
-// //   bool isSyncing = false;
-// //   bool hasSchedule = false;
-// //
-// //   // ** FIX 1: Add a StreamSubscription to listen for responses **
-// //   StreamSubscription? _socketSubscription;
-// //
-// //   @override
-// //   void initState() {
-// //     super.initState();
-// //     _checkInitialStatus();
-// //
-// //     // ** FIX 2: Start listening to the response stream from the service **
-// //     // This is the correct way to get data back from the service
-// //     _socketSubscription = Esp32ApiService.listen().listen((data) {
-// //       if (mounted) {
-// //         // Update the UI with the most recent response from the ESP32
-// //         setState(() => espResponse = data);
-// //       }
-// //     }, onError: (error) {
-// //       if (mounted) {
-// //         setState(() {
-// //           espResponse = "Stream Error: $error";
-// //           statusColor = Colors.red;
-// //           connectionStatus = "Error";
-// //         });
-// //       }
-// //     });
-// //   }
-// //
-// //   // Check connection once at the start
-// //   Future<void> _checkInitialStatus() async {
-// //     setState(() => isLoading = true);
-// //     final connected = await Esp32ApiService.checkConnection();
-// //     if (mounted) {
-// //       setState(() {
-// //         isLoading = false;
-// //         if (connected) {
-// //           connectionStatus = "Connected";
-// //           statusColor = Colors.green;
-// //           espResponse = "ESP32 Connected. Ready for commands.";
-// //         } else {
-// //           connectionStatus = "Disconnected";
-// //           statusColor = Colors.red;
-// //           espResponse = "Connection Failed. Connect to 'SchoolBell_AP' WiFi.";
-// //         }
-// //       });
-// //     }
-// //   }
-// //
-// //
-// //   Future<void> _syncFullSchedule() async {
-// //     final connected = await Esp32ApiService.checkConnection();
-// //     if (!connected) {
-// //       _showSnack("Not connected to ESP32. Check WiFi.", Colors.red);
-// //       return;
-// //     }
-// //
-// //     setState(() {
-// //       isSyncing = true;
-// //       espResponse = "Preparing to send schedule...";
-// //     });
-// //
-// //     final db = await AppDB.instance.database;
-// //
-// //     try {
-// //       // Optional: stop any sound first
-// //       await Esp32ApiService.sendRaw("\$STOP#");
-// //       await Future.delayed(const Duration(milliseconds: 400));
-// //
-// //       // You can send this once at beginning if your firmware supports clearing old slots
-// //       // await Esp32ApiService.sendRaw("\$CLEAR#");   // ← only if your ESP firmware has this command
-// //
-// //       // Decide which mode to use (you can later make this selectable in UI)
-// //       const String currentMode = "SUMMER";   // ← CHANGE HERE when needed: SUMMER, WINTER, EXAM, ...
-// //
-// //       // Get all periods (you can add WHERE categoryId = ? later)
-// //       final List<Map<String, dynamic>> periods = await db.query(
-// //         'periods',
-// //         orderBy: 'day, startTime',
-// //       );
-// //
-// //       if (periods.isEmpty) {
-// //         _showSnack("No periods found in database", Colors.orange);
-// //         setState(() => espResponse = "Nothing to send.");
-// //         return;
-// //       }
-// //
-// //       int sentCount = 0;
-// //
-// //       for (final period in periods) {
-// //         final dayFull = period['day'] as String?;
-// //         final startTime = (period['startTime'] as String?)?.trim() ?? '';
-// //         final isBreak = period['isBreak'] as int? ?? 0;
-// //         final ringtoneRaw = period['ringtone'] as String? ?? '';
-// //
-// //         if (dayFull == null || startTime.isEmpty) continue;
-// //
-// //         // Convert day name → single letter code
-// //         final dayCode = _dayToCode(dayFull);
-// //         if (dayCode.isEmpty) continue;
-// //
-// //         // Extract slot number from title (assuming "Period 1", "Period 2" ...)
-// //         final slotMatch = RegExp(r'Period\s*(\d+)').firstMatch(period['title'] as String? ?? '');
-// //         final slotNum = slotMatch != null ? int.tryParse(slotMatch.group(1)!) : null;
-// //
-// //         if (slotNum == null || slotNum < 1 || slotNum > 9) {
-// //           debugPrint("Skipping invalid slot: ${period['title']}");
-// //           continue;
-// //         }
-// //
-// //         // Format time → must be HH:MM (pad if needed)
-// //         String timeFormatted = startTime;
-// //         if (timeFormatted.length == 4 && !timeFormatted.contains(':')) {
-// //           timeFormatted = '${timeFormatted.substring(0,2)}:${timeFormatted.substring(2)}';
-// //         }
-// //         if (!RegExp(r'^\d{2}:\d{2}$').hasMatch(timeFormatted)) {
-// //           debugPrint("Invalid time format: $timeFormatted");
-// //           continue;
-// //         }
-// //
-// //         // Track number logic
-// //         int track = 1; // default
-// //         if (ringtoneRaw.isNotEmpty) {
-// //           final numMatch = RegExp(r'\d+').firstMatch(ringtoneRaw);
-// //           if (numMatch != null) {
-// //             track = int.tryParse(numMatch.group(0)!) ?? 1;
-// //           }
-// //         }
-// //         // If isBreak == 1 you might want different track (e.g. short bell)
-// //         if (isBreak == 1) {
-// //           track = 3; // ← example: use track 3 for breaks – CHANGE AS NEEDED
-// //         }
-// //
-// //         // Build real command
-// //         final command = "\$$currentMode,$dayCode$slotNum,$timeFormatted,$track#";
-// //
-// //         await Esp32ApiService.sendRaw(command);
-// //         sentCount++;
-// //
-// //         // Small delay – many ESP32 command parsers are slow / buffer-limited
-// //         await Future.delayed(const Duration(milliseconds: 150));
-// //
-// //         // Optional: update UI every 5 commands
-// //         if (sentCount % 5 == 0) {
-// //           if (mounted) {
-// //             setState(() {
-// //               espResponse = "Sent $sentCount / ${periods.length} commands...";
-// //             });
-// //           }
-// //         }
-// //       }
-// //
-// //       // Optional: activate mode (if not already done via $MD command)
-// //       // await Esp32ApiService.sendRaw("\$MM,1#"); // 1 = Summer – only if needed
-// //
-// //       if (mounted) {
-// //         setState(() {
-// //           espResponse = "Sync completed → sent $sentCount slot commands ($currentMode mode)";
-// //         });
-// //         _showSnack("Successfully sent $sentCount periods", Colors.green);
-// //       }
-// //     } catch (e, stack) {
-// //       debugPrint("Sync error: $e\n$stack");
-// //       if (mounted) {
-// //         setState(() => espResponse = "Sync failed: $e");
-// //         _showSnack("Error during sync: $e", Colors.red);
-// //       }
-// //     } finally {
-// //       if (mounted) {
-// //         setState(() => isSyncing = false);
-// //       }
-// //     }
-// //   }
-// //
-// // // Helper: day name → code
-// //   String _dayToCode(String day) {
-// //     final map = {
-// //       'Sunday': 'U',
-// //       'Monday': 'M',
-// //       'Tuesday': 'T',
-// //       'Wednesday': 'W',
-// //       'Thursday': 'H',
-// //       'Friday': 'F',
-// //       'Saturday': 'S',
-// //     };
-// //     return map[day.trim()] ?? '';
-// //   }
-// //
-// //   // ** FIX 3: `_getStatus` now just sends the command. The stream listener handles the response. **
-// //   /// Gets the full status from the ESP32
-// //   Future<void> _getStatus() async {
-// //     setState(() {
-// //       isLoading = true;
-// //       espResponse = "Sending \$STATUS# command..."; // Give immediate feedback
-// //     });
-// //     // getStatus now just sends the command, it doesn't return a value.
-// //     await Esp32ApiService.getStatus();
-// //     if (!mounted) return;
-// //     // We can set loading to false after a short delay to allow the response to arrive.
-// //     Future.delayed(const Duration(seconds: 1), () {
-// //       if (mounted) setState(() => isLoading = false);
-// //     });
-// //   }
-// //
-// //   /// Sends the current time to the ESP32
-// //   Future<void> _sendTime() async {
-// //     setState(() {
-// //       isLoading = true;
-// //       espResponse = "Sending time command..."; // Give immediate feedback
-// //     });
-// //
-// //     final now = DateTime.now();
-// //     // Format: $R,DD-MM-YY,HH:MM:SS#
-// //     final dateStr = "${now.day.toString().padLeft(2, '0')}-${now.month.toString().padLeft(2, '0')}-${(now.year % 100).toString().padLeft(2, '0')}";
-// //     final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}";
-// //     final command = "\$R,$dateStr,$timeStr#";
-// //
-// //     // sendRaw is `void`, so we just call it.
-// //     await Esp32ApiService.sendRaw(command);
-// //     if (!mounted) return;
-// //     Future.delayed(const Duration(seconds: 1), () {
-// //       if (mounted) setState(() => isLoading = false);
-// //     });
-// //   }
-// //
-// //   void _showSnack(String msg, Color color) {
-// //     if (!mounted) return;
-// //     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
-// //   }
-// //
-// //   // ** FIX 5: Cancel the subscription in dispose to prevent memory leaks **
-// //   @override
-// //   void dispose() {
-// //     _socketSubscription?.cancel();
-// //     Esp32ApiService.disconnect();
-// //     super.dispose();
-// //   }
-// //
-// //   @override
-// //   Widget build(BuildContext context) {
-// //     // The UI code is correct and reads from the state variables that are now properly updated.
-// //     return Scaffold(
-// //       appBar: AppBar(
-// //         title: const Text("ESP32 Sync Dashboard"),
-// //         actions: [
-// //           Padding(
-// //             padding: const EdgeInsets.only(right: 16.0),
-// //             child: Row(
-// //               children: [
-// //                 Text(connectionStatus, style: TextStyle(color: statusColor)),
-// //                 const SizedBox(width: 8),
-// //                 Icon(Icons.wifi, color: statusColor),
-// //               ],
-// //             ),
-// //           ),
-// //         ],
-// //       ),
-// //       body: Padding(
-// //         padding: const EdgeInsets.all(16),
-// //         child: Column(
-// //           crossAxisAlignment: CrossAxisAlignment.stretch,
-// //           children: [
-// //             // Response Display Area
-// //             Container(
-// //               height: 150,
-// //               width: double.infinity,
-// //               padding: const EdgeInsets.all(12),
-// //               decoration: BoxDecoration(
-// //                 color: Colors.grey.shade200,
-// //                 border: Border.all(color: Colors.grey.shade400),
-// //                 borderRadius: BorderRadius.circular(8),
-// //               ),
-// //               child: SingleChildScrollView(
-// //                 child: Text(
-// //                   espResponse,
-// //                   style: const TextStyle(fontSize: 16, fontFamily: 'monospace'),
-// //                 ),
-// //               ),
-// //             ),
-// //             const SizedBox(height: 20),
-// //
-// //             // Main Sync Button
-// //             ElevatedButton.icon(
-// //               onPressed: isLoading || isSyncing ? null : _syncFullSchedule,
-// //               icon: isSyncing
-// //                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-// //                   : const Icon(Icons.sync),
-// //               label: Text(isSyncing ? "Syncing..." : "Full Sync to ESP32"),
-// //               style: ElevatedButton.styleFrom(
-// //                 backgroundColor: Colors.green,
-// //                 minimumSize: const Size(double.infinity, 50),
-// //               ),
-// //             ),
-// //             const SizedBox(height: 10),
-// //
-// //             // Diagnostic Buttons
-// //             ElevatedButton.icon(
-// //               onPressed: isLoading || isSyncing ? null : _getStatus,
-// //               icon: const Icon(Icons.info_outline),
-// //               label: const Text("Get Status"),
-// //               style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-// //             ),
-// //             const SizedBox(height: 10),
-// //
-// //             ElevatedButton.icon(
-// //               onPressed: isLoading || isSyncing ? null : _sendTime,
-// //               icon: const Icon(Icons.today),
-// //               label: const Text("Send Time to ESP32"),
-// //               style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
-// //             ),
-// //
-// //             if (isLoading && !isSyncing) ...[
-// //               const SizedBox(height: 20),
-// //               const Center(child: CircularProgressIndicator()),
-// //             ],
-// //           ],
-// //         ),
-// //       ),
-// //     );
-// //   }
-// // }
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-//
-// //
-// //
-// // import 'package:flutter/material.dart';
-// // import 'package:path/path.dart' as p; // Import path package
-// // import 'dart:async';
-// // import '../../services/esp32_api_service.dart';
-// // import '../../database/app_database.dart';
-// //
-// //
-// // class DashboardPage extends StatefulWidget {
-// //   const DashboardPage({super.key});
-// //
-// //   @override
-// //   State<DashboardPage> createState() => _DashboardPageState();
-// // }
-// //
-// // class _DashboardPageState extends State<DashboardPage> {
-// //   // State variables to manage UI and data
-// //   String espResponse = "Press a button to get data.";
-// //   String connectionStatus = "Disconnected";
-// //   Color statusColor = Colors.red;
-// //   bool isLoading = false;
-// //   bool isSyncing = false;
-// //   bool hasSchedule = false;
-// //
-// //   // ** FIX 1: Add a StreamSubscription to listen for responses **
-// //   StreamSubscription? _socketSubscription;
-// //
-// //   @override
-// //   void initState() {
-// //     super.initState();
-// //     _checkInitialStatus();
-// //
-// //     // ** FIX 2: Start listening to the response stream from the service **
-// //     // This is the correct way to get data back from the service
-// //     _socketSubscription = Esp32ApiService.listen().listen((data) {
-// //       if (mounted) {
-// //         // Update the UI with the most recent response from the ESP32
-// //         setState(() => espResponse = data);
-// //       }
-// //     }, onError: (error) {
-// //       if (mounted) {
-// //         setState(() {
-// //           espResponse = "Stream Error: $error";
-// //           statusColor = Colors.red;
-// //           connectionStatus = "Error";
-// //         });
-// //       }
-// //     });
-// //   }
-// //
-// //   // Check connection once at the start
-// //   Future<void> _checkInitialStatus() async {
-// //     setState(() => isLoading = true);
-// //     final connected = await Esp32ApiService.checkConnection();
-// //     if (mounted) {
-// //       setState(() {
-// //         isLoading = false;
-// //         if (connected) {
-// //           connectionStatus = "Connected";
-// //           statusColor = Colors.green;
-// //           espResponse = "Bell Connected. Ready for commands.";
-// //         } else {
-// //           connectionStatus = "Disconnected";
-// //           statusColor = Colors.red;
-// //           espResponse = "Connection Failed. Connect to 'SchoolBell_AP' WiFi.";
-// //         }
-// //       });
-// //     }
-// //   }
-// //
-// //
-// //   Future<void> _syncFullSchedule() async {
-// //     final connected = await Esp32ApiService.checkConnection();
-// //     if (!connected) {
-// //       _showSnack("Not connected to Bell. Check WiFi.", Colors.red);
-// //       return;
-// //     }
-// //
-// //     setState(() {
-// //       isSyncing = true;
-// //       espResponse = "Preparing to send schedule...";
-// //     });
-// //
-// //     final db = await AppDB.instance.database;
-// //
-// //     try {
-// //       // Optional: stop any sound first
-// //       await Esp32ApiService.sendRaw("\$STOP#");
-// //       await Future.delayed(const Duration(milliseconds: 400));
-// //
-// //       // You can send this once at beginning if your firmware supports clearing old slots
-// //       // await Esp32ApiService.sendRaw("\$CLEAR#");   // ← only if your ESP firmware has this command
-// //
-// //       // Decide which mode to use (you can later make this selectable in UI)
-// //       const String currentMode = "SUMMER";   // ← CHANGE HERE when needed: SUMMER, WINTER, EXAM, ...
-// //
-// //       // Get all periods (you can add WHERE categoryId = ? later)
-// //       final List<Map<String, dynamic>> periods = await db.query(
-// //         'periods',
-// //         orderBy: 'day, startTime',
-// //       );
-// //
-// //       if (periods.isEmpty) {
-// //         _showSnack("No periods found in database", Colors.orange);
-// //         setState(() => espResponse = "Nothing to send.");
-// //         return;
-// //       }
-// //
-// //       int sentCount = 0;
-// //
-// //       for (final period in periods) {
-// //         final dayFull = period['day'] as String?;
-// //         final startTime = (period['startTime'] as String?)?.trim() ?? '';
-// //         final isBreak = period['isBreak'] as int? ?? 0;
-// //         final ringtoneRaw = period['ringtone'] as String? ?? '';
-// //
-// //         if (dayFull == null || startTime.isEmpty) continue;
-// //
-// //         // Convert day name → single letter code
-// //         final dayCode = _dayToCode(dayFull);
-// //         if (dayCode.isEmpty) continue;
-// //
-// //         // Extract slot number from title (assuming "Period 1", "Period 2" ...)
-// //         final slotMatch = RegExp(r'Period\s*(\d+)').firstMatch(period['title'] as String? ?? '');
-// //         final slotNum = slotMatch != null ? int.tryParse(slotMatch.group(1)!) : null;
-// //
-// //         if (slotNum == null || slotNum < 1 || slotNum > 9) {
-// //           debugPrint("Skipping invalid slot: ${period['title']}");
-// //           continue;
-// //         }
-// //
-// //         // Format time → must be HH:MM (pad if needed)
-// //         String timeFormatted = startTime;
-// //         if (timeFormatted.length == 4 && !timeFormatted.contains(':')) {
-// //           timeFormatted = '${timeFormatted.substring(0,2)}:${timeFormatted.substring(2)}';
-// //         }
-// //         if (!RegExp(r'^\d{2}:\d{2}$').hasMatch(timeFormatted)) {
-// //           debugPrint("Invalid time format: $timeFormatted");
-// //           continue;
-// //         }
-// //
-// //         // Track number logic
-// //         int track = 1; // default
-// //         if (ringtoneRaw.isNotEmpty) {
-// //           final numMatch = RegExp(r'\d+').firstMatch(ringtoneRaw);
-// //           if (numMatch != null) {
-// //             track = int.tryParse(numMatch.group(0)!) ?? 1;
-// //           }
-// //         }
-// //         // If isBreak == 1 you might want different track (e.g. short bell)
-// //         if (isBreak == 1) {
-// //           track = 3; // ← example: use track 3 for breaks – CHANGE AS NEEDED
-// //         }
-// //
-// //         // Build real command
-// //         final command = "\$$currentMode,$dayCode$slotNum,$timeFormatted,$track#";
-// //
-// //         await Esp32ApiService.sendRaw(command);
-// //         sentCount++;
-// //
-// //         // Small delay – many ESP32 command parsers are slow / buffer-limited
-// //         await Future.delayed(const Duration(milliseconds: 150));
-// //
-// //         // Optional: update UI every 5 commands
-// //         if (sentCount % 5 == 0) {
-// //           if (mounted) {
-// //             setState(() {
-// //               espResponse = "Sent $sentCount / ${periods.length} commands...";
-// //             });
-// //           }
-// //         }
-// //       }
-// //
-// //       // Optional: activate mode (if not already done via $MD command)
-// //       // await Esp32ApiService.sendRaw("\$MM,1#"); // 1 = Summer – only if needed
-// //
-// //       if (mounted) {
-// //         setState(() {
-// //           espResponse = "Sync completed → sent $sentCount slot commands ($currentMode mode)";
-// //         });
-// //         _showSnack("Successfully sent $sentCount periods", Colors.green);
-// //       }
-// //     } catch (e, stack) {
-// //       debugPrint("Sync error: $e\n$stack");
-// //       if (mounted) {
-// //         setState(() => espResponse = "Sync failed: $e");
-// //         _showSnack("Error during sync: $e", Colors.red);
-// //       }
-// //     } finally {
-// //       if (mounted) {
-// //         setState(() => isSyncing = false);
-// //       }
-// //     }
-// //   }
-// //
-// // // Helper: day name → code
-// //   String _dayToCode(String day) {
-// //     final map = {
-// //       'Sunday': 'U',
-// //       'Monday': 'M',
-// //       'Tuesday': 'T',
-// //       'Wednesday': 'W',
-// //       'Thursday': 'H',
-// //       'Friday': 'F',
-// //       'Saturday': 'S',
-// //     };
-// //     return map[day.trim()] ?? '';
-// //   }
-// //
-// //   // ** FIX 3: `_getStatus` now just sends the command. The stream listener handles the response. **
-// //   /// Gets the full status from the ESP32
-// //   Future<void> _getStatus() async {
-// //     setState(() {
-// //       isLoading = true;
-// //       espResponse = "Sending \$STATUS# command..."; // Give immediate feedback
-// //     });
-// //     // getStatus now just sends the command, it doesn't return a value.
-// //     await Esp32ApiService.getStatus();
-// //     if (!mounted) return;
-// //     // We can set loading to false after a short delay to allow the response to arrive.
-// //     Future.delayed(const Duration(seconds: 1), () {
-// //       if (mounted) setState(() => isLoading = false);
-// //     });
-// //   }
-// //
-// //   /// Sends the current time to the ESP32
-// //   Future<void> _sendTime() async {
-// //     setState(() {
-// //       isLoading = true;
-// //       espResponse = "Sending time command..."; // Give immediate feedback
-// //     });
-// //
-// //     final now = DateTime.now();
-// //     // Format: $R,DD-MM-YY,HH:MM:SS#
-// //     final dateStr = "${now.day.toString().padLeft(2, '0')}-${now.month.toString().padLeft(2, '0')}-${(now.year % 100).toString().padLeft(2, '0')}";
-// //     final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}";
-// //     final command = "\$R,$dateStr,$timeStr#";
-// //
-// //     // sendRaw is `void`, so we just call it.
-// //     await Esp32ApiService.sendRaw(command);
-// //     if (!mounted) return;
-// //     Future.delayed(const Duration(seconds: 1), () {
-// //       if (mounted) setState(() => isLoading = false);
-// //     });
-// //   }
-// //
-// //   void _showSnack(String msg, Color color) {
-// //     if (!mounted) return;
-// //     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
-// //   }
-// //
-// //   // ** FIX 5: Cancel the subscription in dispose to prevent memory leaks **
-// //   @override
-// //   void dispose() {
-// //     _socketSubscription?.cancel();
-// //     Esp32ApiService.disconnect();
-// //     super.dispose();
-// //   }
-// //
-// //   // =======================================================================
-// //   // ==================== NEW and UPDATED build() METHOD ===================
-// //   // =======================================================================
-// //   @override
-// //   Widget build(BuildContext context) {
-// //     final bool isBusy = isLoading || isSyncing;
-// //     final theme = Theme.of(context);
-// //
-// //     return Scaffold(
-// //       appBar: AppBar(
-// //         title: const Text("Bell Dashboard"),
-// //         centerTitle: true,
-// //         actions: [
-// //           // Connection Status Indicator in AppBar
-// //           Padding(
-// //             padding: const EdgeInsets.only(right: 16.0),
-// //             child: Row(
-// //               children: [
-// //                 Text(connectionStatus, style: TextStyle(color: statusColor, fontWeight: FontWeight.bold)),
-// //                 const SizedBox(width: 8),
-// //                 Icon(Icons.wifi, color: statusColor),
-// //               ],
-// //             ),
-// //           ),
-// //         ],
-// //       ),
-// //       // Use a ListView for better scrolling on small devices
-// //       body: ListView(
-// //         padding: const EdgeInsets.all(12.0),
-// //         children: [
-// //           // --- Status Display Card ---
-// //           _buildStatusCard(theme),
-// //           const SizedBox(height: 20),
-// //
-// //           // --- Main Sync Action Card ---
-// //           _buildSyncCard(isBusy),
-// //           const SizedBox(height: 20),
-// //
-// //           // --- Grid of other actions ---
-// //           Text("Device Actions", style: theme.textTheme.titleLarge?.copyWith(color: Colors.black54)),
-// //           const SizedBox(height: 10),
-// //           GridView.count(
-// //             crossAxisCount: 2, // 2 cards per row
-// //             crossAxisSpacing: 12,
-// //             mainAxisSpacing: 12,
-// //             shrinkWrap: true, // Important for GridView inside ListView
-// //             physics: const NeverScrollableScrollPhysics(), // Disable GridView's own scrolling
-// //             children: [
-// //               _buildActionCard(
-// //                 context: context,
-// //                 title: "Get Status",
-// //                 icon: Icons.info_outline_rounded,
-// //                 onTap: isBusy ? null : _getStatus,
-// //                 color: Colors.blue.shade700,
-// //                 // Show loading spinner only on this card if it's the one loading
-// //                 isLoading: isLoading && !isSyncing,
-// //               ),
-// //               _buildActionCard(
-// //                 context: context,
-// //                 title: "Send Time",
-// //                 icon: Icons.access_time_filled_rounded,
-// //                 onTap: isBusy ? null : _sendTime,
-// //                 color: Colors.orange.shade800,
-// //                 // Show loading spinner only on this card if it's the one loading
-// //                 isLoading: isLoading && !isSyncing,
-// //               ),
-// //               // You can add more cards here in the future
-// //             ],
-// //           ),
-// //         ],
-// //       ),
-// //     );
-// //   }
-// //
-// //   /// Builds the main card for the "Full Sync" action.
-// //   Widget _buildSyncCard(bool isBusy) {
-// //     return Card(
-// //       elevation: 4,
-// //       color: Colors.green.shade700,
-// //       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-// //       child: InkWell(
-// //         onTap: isBusy ? null : _syncFullSchedule,
-// //         borderRadius: BorderRadius.circular(12),
-// //         child: Padding(
-// //           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-// //           child: Row(
-// //             mainAxisAlignment: MainAxisAlignment.center,
-// //             children: [
-// //               if (isSyncing)
-// //                 const SizedBox(
-// //                   width: 24,
-// //                   height: 24,
-// //                   child: CircularProgressIndicator(strokeWidth: 3, color: Colors.white),
-// //                 )
-// //               else
-// //                 const Icon(Icons.sync_rounded, color: Colors.white, size: 28),
-// //               const SizedBox(width: 16),
-// //               Text(
-// //                 isSyncing ? "Syncing Schedule..." : "Full Sync to Bell",
-// //                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-// //               ),
-// //             ],
-// //           ),
-// //         ),
-// //       ),
-// //     );
-// //   }
-// //
-// //   /// Builds the card that displays the ESP32 response.
-// //   Widget _buildStatusCard(ThemeData theme) {
-// //     return Card(
-// //       elevation: 2,
-// //       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-// //       child: Padding(
-// //         padding: const EdgeInsets.all(16.0),
-// //         child: Column(
-// //           crossAxisAlignment: CrossAxisAlignment.start,
-// //           children: [
-// //             Row(
-// //               children: [
-// //                 Icon(Icons.terminal_rounded, color: theme.primaryColor),
-// //                 const SizedBox(width: 8),
-// //                 Text("Bell Response", style: theme.textTheme.titleMedium),
-// //               ],
-// //             ),
-// //             const Divider(height: 20),
-// //             // The scrollable response area
-// //             SizedBox(
-// //               height: 150,
-// //               width: double.infinity,
-// //               child: SingleChildScrollView(
-// //                 child: Text(
-// //                   espResponse,
-// //                   style: const TextStyle(fontSize: 15, fontFamily: 'monospace', color: Colors.black87),
-// //                 ),
-// //               ),
-// //             ),
-// //           ],
-// //         ),
-// //       ),
-// //     );
-// //   }
-// //
-// //   /// Generic builder for action cards in the grid.
-// //   Widget _buildActionCard({
-// //     required BuildContext context,
-// //     required String title,
-// //     required IconData icon,
-// //     required Color color,
-// //     required VoidCallback? onTap,
-// //     bool isLoading = false,
-// //   }) {
-// //     return Card(
-// //       elevation: 2,
-// //       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-// //       child: InkWell(
-// //         onTap: onTap,
-// //         borderRadius: BorderRadius.circular(12),
-// //         child: Column(
-// //           mainAxisAlignment: MainAxisAlignment.center,
-// //           crossAxisAlignment: CrossAxisAlignment.center,
-// //           children: [
-// //             if (isLoading)
-// //               const CircularProgressIndicator()
-// //             else
-// //               Icon(icon, size: 40, color: color),
-// //             const SizedBox(height: 12),
-// //             Text(
-// //               title,
-// //               textAlign: TextAlign.center,
-// //               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-// //             ),
-// //           ],
-// //         ),
-// //       ),
-// //     );
-// //   }
-// // }
-//
-//
-//
-// import 'package:flutter/material.dart';
-// import 'dart:async';
-// import '../../services/esp32_api_service.dart';
-// import '../../database/app_database.dart';
-//
-// class DashboardPage extends StatefulWidget {
-//   const DashboardPage({super.key});
-//
-//   @override
-//   State<DashboardPage> createState() => _DashboardPageState();
-// }
-//
-// class _DashboardPageState extends State<DashboardPage> {
-//   // UI + state
-//   String espResponse = "Press a button to get data.";
-//   String connectionStatus = "Disconnected";
-//   Color statusColor = Colors.red;
-//   bool isLoading = false;
-//   bool isSyncing = false;
-//
-//   final TextEditingController _commandController = TextEditingController();
-//   StreamSubscription? _socketSubscription;
-//
-//   @override
-//   void initState() {
-//     super.initState();
-//     _checkInitialStatus();
-//
-//     // Listen ESP32 responses
-//     _socketSubscription = Esp32ApiService.listen().listen((data) {
-//       if (mounted) {
-//         setState(() => espResponse = data);
-//       }
-//     }, onError: (error) {
-//       if (mounted) {
-//         setState(() {
-//           espResponse = "Stream Error: $error";
-//           statusColor = Colors.red;
-//           connectionStatus = "Error";
-//         });
-//       }
-//     });
-//   }
-//
-//   Future<void> _checkInitialStatus() async {
-//     setState(() => isLoading = true);
-//     final connected = await Esp32ApiService.checkConnection();
-//
-//     if (!mounted) return;
-//
-//     setState(() {
-//       isLoading = false;
-//       if (connected) {
-//         connectionStatus = "Connected";
-//         statusColor = Colors.green;
-//         espResponse = "ESP32 Connected. Ready for commands.";
-//       } else {
-//         connectionStatus = "Disconnected";
-//         statusColor = Colors.red;
-//         espResponse = "Connection Failed. Connect to 'SchoolBell_AP' WiFi.";
-//       }
-//     });
-//   }
-//
-//   // ================= TERMINAL COMMAND =================
-//   Future<void> _sendManualCommand() async {
-//     final cmd = _commandController.text.trim();
-//
-//     if (cmd.isEmpty) {
-//       _showSnack("Enter a command", Colors.orange);
-//       return;
-//     }
-//
-//     final connected = await Esp32ApiService.checkConnection();
-//     if (!connected) {
-//       _showSnack("ESP32 not connected", Colors.red);
-//       return;
-//     }
-//
-//     setState(() {
-//       isLoading = true;
-//       espResponse = ">> $cmd";
-//     });
-//
-//     await Esp32ApiService.sendRaw(cmd);
-//     _commandController.clear();
-//
-//     Future.delayed(const Duration(seconds: 1), () {
-//       if (mounted) setState(() => isLoading = false);
-//     });
-//   }
-//
-//   // ================= FULL SYNC =================
-//   Future<void> _syncFullSchedule() async {
-//     final connected = await Esp32ApiService.checkConnection();
-//     if (!connected) {
-//       _showSnack("Not connected to ESP32", Colors.red);
-//       return;
-//     }
-//
-//     setState(() {
-//       isSyncing = true;
-//       espResponse = "Reading schedule from database...";
-//     });
-//
-//     final db = await AppDB.instance.database;
-//
-//     try {
-//       const String currentMode = "SUMMER";
-//
-//       final periods = await db.query(
-//         'periods',
-//         orderBy: 'day, startTime',
-//       );
-//
-//       if (periods.isEmpty) {
-//         _showSnack("No schedule found", Colors.orange);
-//         setState(() {
-//           isSyncing = false;
-//           espResponse = "Nothing to send.";
-//         });
-//         return;
-//       }
-//
-//       final buffer = StringBuffer();
-//       int count = 0;
-//
-//       for (final p in periods) {
-//         final day = p['day'] as String?;
-//         final start = p['startTime'] as String?;
-//         final isBreak = p['isBreak'] as int? ?? 0;
-//         final title = p['title'] as String? ?? '';
-//         final ringtone = p['ringtone'] as String? ?? '';
-//
-//         if (day == null || start == null) continue;
-//
-//         final dayCode = _dayToCode(day);
-//         if (dayCode.isEmpty) continue;
-//
-//         final match = RegExp(r'Period\s*(\d+)').firstMatch(title);
-//         final slot = match != null ? int.tryParse(match.group(1)!) : null;
-//         if (slot == null || slot > 10) continue;
-//
-//         String time = start.contains(':')
-//             ? start
-//             : "${start.substring(0, 2)}:${start.substring(2)}";
-//
-//         int track = isBreak == 1 ? 3 : 1;
-//         final rMatch = RegExp(r'\d+').firstMatch(ringtone);
-//         if (rMatch != null) {
-//           track = int.parse(rMatch.group(0)!);
-//         }
-//
-//
-//         buffer.write("\$$currentMode,$dayCode$slot,$time,$track#");
-//         count++;
-//       }
-//
-//       await Esp32ApiService.sendRaw(buffer.toString());
-//
-//       setState(() => espResponse = "Sync complete ($count commands)");
-//       _showSnack("Schedule synced successfully", Colors.green);
-//
-//     } catch (e) {
-//       setState(() => espResponse = "Sync error: $e");
-//       _showSnack("Sync failed", Colors.red);
-//     } finally {
-//       if (mounted) setState(() => isSyncing = false);
-//     }
-//   }
-//
-//   String _dayToCode(String day) {
-//     const map = {
-//       'SUNDAY': 'U',
-//       'MONDAY': 'M',
-//       'TUESDAY': 'T',
-//       'WEDNESDAY': 'W',
-//       'THURSDAY': 'H',
-//       'FRIDAY': 'F',
-//       'SATURDAY': 'S',
-//     };
-//     return map[day.toUpperCase()] ?? '';
-//   }
-//
-//   Future<void> _getStatus() async {
-//     setState(() => isLoading = true);
-//     await Esp32ApiService.getStatus();
-//     Future.delayed(const Duration(seconds: 1), () {
-//       if (mounted) setState(() => isLoading = false);
-//     });
-//   }
-//
-//   Future<void> _sendTime() async {
-//     setState(() => isLoading = true);
-//
-//     final now = DateTime.now();
-//     final cmd =
-//         "\$R,${now.day.toString().padLeft(2, '0')}-${now.month.toString().padLeft(2, '0')}-${(now.year % 100)},"
-//         "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}#";
-//
-//     await Esp32ApiService.sendRaw(cmd);
-//
-//     Future.delayed(const Duration(seconds: 1), () {
-//       if (mounted) setState(() => isLoading = false);
-//     });
-//   }
-//
-//   void _showSnack(String msg, Color color) {
-//     ScaffoldMessenger.of(context)
-//         .showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
-//   }
-//
-//   @override
-//   void dispose() {
-//     _commandController.dispose();
-//     _socketSubscription?.cancel();
-//     Esp32ApiService.disconnect();
-//     super.dispose();
-//   }
-//
-//   // ================= UI =================
-//   @override
-//   Widget build(BuildContext context) {
-//     final isBusy = isLoading || isSyncing;
-//
-//     return Scaffold(
-//       appBar: AppBar(
-//         title: const Text("ESP32 Sync Dashboard"),
-//         actions: [
-//           Row(
-//             children: [
-//               Text(connectionStatus,
-//                   style: TextStyle(color: statusColor)),
-//               const SizedBox(width: 8),
-//               Icon(Icons.wifi, color: statusColor),
-//               const SizedBox(width: 16),
-//             ],
-//           )
-//         ],
-//       ),
-//       body: ListView(
-//         padding: const EdgeInsets.all(12),
-//         children: [
-//           _buildStatusCard(),
-//           const SizedBox(height: 16),
-//           _buildTerminalCard(isBusy),
-//           const SizedBox(height: 16),
-//           _buildSyncCard(isBusy),
-//           const SizedBox(height: 16),
-//           GridView.count(
-//             shrinkWrap: true,
-//             physics: const NeverScrollableScrollPhysics(),
-//             crossAxisCount: 2,
-//             children: [
-//               _buildAction("Get Status", Icons.info, _getStatus, isBusy),
-//               _buildAction("Send Time", Icons.access_time, _sendTime, isBusy),
-//             ],
-//           ),
-//         ],
-//       ),
-//     );
-//   }
-//
-//   Widget _buildTerminalCard(bool isBusy) {
-//     return Card(
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           children: [
-//             const Text("Send Command Terminal",
-//                 style: TextStyle(fontWeight: FontWeight.bold)),
-//             const SizedBox(height: 12),
-//             TextField(
-//               controller: _commandController,
-//               enabled: !isBusy,
-//               style: const TextStyle(fontFamily: 'monospace'),
-//               decoration: const InputDecoration(
-//                 hintText: r"$STATUS#",
-//                 border: OutlineInputBorder(),
-//               ),
-//               onSubmitted: (_) => _sendManualCommand(),
-//             ),
-//             const SizedBox(height: 10),
-//             ElevatedButton.icon(
-//               onPressed: isBusy ? null : _sendManualCommand,
-//               icon: const Icon(Icons.send),
-//               label: const Text("Send"),
-//             ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-//
-//   Widget _buildSyncCard(bool isBusy) {
-//     return Card(
-//       color: Colors.green,
-//       child: ListTile(
-//         leading: isSyncing
-//             ? const CircularProgressIndicator(color: Colors.white)
-//             : const Icon(Icons.sync, color: Colors.white),
-//         title: const Text("Full Sync to ESP32",
-//             style: TextStyle(color: Colors.white)),
-//         onTap: isBusy ? null : _syncFullSchedule,
-//       ),
-//     );
-//   }
-//
-//   Widget _buildStatusCard() {
-//     return Card(
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: SizedBox(
-//           height: 140,
-//           child: SingleChildScrollView(
-//             child: Text(espResponse,
-//                 style: const TextStyle(fontFamily: 'monospace')),
-//           ),
-//         ),
-//       ),
-//     );
-//   }
-//
-//   Widget _buildAction(
-//       String title, IconData icon, VoidCallback fn, bool isBusy) {
-//     return Card(
-//       child: InkWell(
-//         onTap: isBusy ? null : fn,
-//         child: Column(
-//           mainAxisAlignment: MainAxisAlignment.center,
-//           children: [
-//             Icon(icon, size: 36),
-//             const SizedBox(height: 8),
-//             Text(title),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-// }
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:lottie/lottie.dart';
+import 'package:sqflite/sqflite.dart';
+
+import '../../services/esp32_api_service.dart';
+import '../../database/app_database.dart';
+import '../announcement/announcement_page.dart';
+import '../category/category_list_page.dart';
+import '../category/create_category_page.dart';
+import '../emergency/emergency_page.dart';
+import '../today_schedule_page.dart';
+import 'widgets/device_schedule_manager_sheet.dart';
+import 'settings_page.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class DashboardPage extends StatefulWidget {
+  const DashboardPage({super.key});
+
+  @override
+  State<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserver {
+  String time = "--:--";
+  String date = "";
+  String nextPeriodInfo = "Loading...";
+  Map<String, dynamic>? nextPeriodData; 
+  List<Map<String, dynamic>> todayPeriods = []; 
+  List<Map<String, dynamic>> skippedPeriods = []; // Store multiple skipped periods
+  bool get isSkipActive => skippedPeriods.isNotEmpty;
+  Timer? timer;
+  bool hasSchedule = false;
+  int currentVolume = 70;
+  String? orgName;
+  bool _isDeviceConnected = false;
+
+  StreamSubscription<bool>? _connectionSub;
+  late final Future<Database> _dbFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _dbFuture = AppDB.instance.database;
+    _isDeviceConnected = Esp32ApiService.isConnected;
+    _connectionSub = Esp32ApiService.connectionStateStream.listen((connected) {
+      if (mounted) {
+        setState(() {
+          _isDeviceConnected = connected;
+        });
+      }
+    });
+    _init();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkConnectionAndInit();
+    }
+  }
+
+  Future<void> _checkConnectionAndInit() async {
+    final connected = await Esp32ApiService.checkConnection();
+    if (mounted) {
+      setState(() {
+        _isDeviceConnected = connected;
+      });
+      _init();
+    }
+  }
+
+  Future<void> _init() async {
+    final db = await _dbFuture;
+    final prefs = await SharedPreferences.getInstance();
+    
+    if (mounted) {
+      setState(() {
+        orgName = prefs.getString('org_name');
+        _isDeviceConnected = Esp32ApiService.isConnected;
+      });
+    }
+
+    final countResult =
+    await db.rawQuery('SELECT COUNT(*) as c FROM categories');
+    if (mounted) {
+      setState(() {
+        final count = countResult.first['c'] as int?;
+        hasSchedule = (count ?? 0) > 0;
+        if (!hasSchedule) {
+          nextPeriodInfo = "No schedule created";
+        }
+      });
+    }
+
+    if (hasSchedule) {
+      _loadNextPeriod();
+      timer?.cancel();
+      timer = Timer.periodic(const Duration(minutes: 1), (_) => _loadNextPeriod());
+    } else {
+      timer?.cancel();
+      time = "--:--";
+      nextPeriodInfo = "No schedule created";
+    }
+  }
+
+  Future<List<int>> _getActiveCategoryIds(Database db) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    
+    final List<int> ids = [];
+    final categoriesRes = await db.query('categories');
+    for (var row in categoriesRes) {
+      try {
+        final synced = row['synced'] as int? ?? 0;
+        if (synced != 1) continue; // Must be synced to hardware device!
+
+        final start = DateTime.parse(row['startDate'] as String);
+        final end = DateTime.parse(row['endDate'] as String);
+        
+        final startDate = DateTime(start.year, start.month, start.day);
+        final endDate = DateTime(end.year, end.month, end.day);
+
+        if (today.isAtSameMomentAs(startDate) || 
+            today.isAtSameMomentAs(endDate) ||
+            (today.isAfter(startDate) && today.isBefore(endDate))) {
+          ids.add(row['id'] as int);
+        }
+      } catch (e) {
+        debugPrint("Error parsing date for category: $e");
+      }
+    }
+    return ids;
+  }
+
+  Future<void> _loadNextPeriod() async {
+    final db = await _dbFuture;
+    
+    final activeIds = await _getActiveCategoryIds(db);
+    if (activeIds.isEmpty) {
+      if (mounted) {
+        setState(() {
+          time = "--:--";
+          nextPeriodInfo = "No active category for today";
+        });
+      }
+      return;
+    }
+
+    final List<Map<String, dynamic>> allValidPeriods = [];
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final String currentDay = DateFormat('EEEE').format(now).toUpperCase();
+
+    // 1. Collect all valid periods from ALL active categories
+    for (int activeId in activeIds) {
+      final catRes = await db.query('categories', where: 'id = ?', whereArgs: [activeId]);
+      if (catRes.isEmpty) continue;
+
+      // Check Exclusions for this specific category
+      final skippedDaysStr = catRes.first['skippedDays'] as String? ?? "";
+      final skippedDays = skippedDaysStr.split(',').where((s) => s.isNotEmpty).map(int.parse).toList();
+      if (skippedDays.contains(now.weekday % 7)) continue;
+
+      final skippedDatesStr = catRes.first['skippedDates'] as String? ?? "";
+      final skippedDates = skippedDatesStr.split(',').where((s) => s.isNotEmpty).map(DateTime.parse).toList();
+      if (skippedDates.any((d) => d.year == today.year && d.month == today.month && d.day == today.day)) continue;
+
+      // Fetch periods
+      final List<Map<String, dynamic>> rawResult = await db.rawQuery(
+        'SELECT * FROM periods WHERE categoryId = ? AND UPPER(day) = ?',
+        [activeId, currentDay],
+      );
+      
+      // Inject logical start for this category into each period map for sorting
+      String logicalStart = "00:00";
+      if (catRes.first['scheduleConfig'] != null) {
+        try {
+          final config = jsonDecode(catRes.first['scheduleConfig'] as String);
+          logicalStart = config['startTime'] ?? "00:00";
+        } catch (_) {}
+      }
+
+      for (var p in rawResult) {
+        final mutableP = Map<String, dynamic>.from(p);
+        mutableP['@logicalStart'] = logicalStart;
+        allValidPeriods.add(mutableP);
+      }
+    }
+
+    if (allValidPeriods.isEmpty) {
+      if (mounted) setState(() { time = "--:--"; nextPeriodInfo = "No periods scheduled for today"; });
+      return;
+    }
+
+    int toMinutes(String timeStr) {
+      final parts = timeStr.split(':');
+      return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+    }
+
+    // 2. Sort logically using each period's parent category logicalStart
+    allValidPeriods.sort((a, b) {
+      final int startA = toMinutes(a['@logicalStart']);
+      final int startB = toMinutes(b['@logicalStart']);
+
+      int am = toMinutes(a['startTime']);
+      int bm = toMinutes(b['startTime']);
+
+      if (am < startA) am += 1440;
+      if (bm < startB) bm += 1440;
+
+      return am.compareTo(bm);
+    });
+
+    // 3. Find the NEXT period based on current time
+    final TimeOfDay currentTimeOfDay = TimeOfDay.now();
+    final String currentTimeStr =
+        '${currentTimeOfDay.hour.toString().padLeft(2, '0')}:${currentTimeOfDay.minute.toString().padLeft(2, '0')}';
+    final int nowMinutes = toMinutes(currentTimeStr);
+    
+    Map<String, dynamic>? next;
+
+    for (var p in allValidPeriods) {
+      final int logicalStartM = toMinutes(p['@logicalStart']);
+      int pStart = toMinutes(p['startTime']);
+      
+      // Handle midnight wrap in the comparison
+      if (pStart < logicalStartM) pStart += 1440;
+      
+      if (pStart > nowMinutes) {
+        next = p;
+        break;
+      }
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      todayPeriods = allValidPeriods; // Save the full list
+      if (next == null) {
+        time = "--:--";
+        nextPeriodInfo = "No more periods today";
+        nextPeriodData = null;
+      } else {
+        time = next['startTime'] as String;
+        nextPeriodInfo = "Next: ${next['title'] as String}";
+        nextPeriodData = next;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _connectionSub?.cancel();
+    timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double screenHeight = MediaQuery.of(context).size.height;
+    final bool isSmallScreen = screenHeight < 700;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF2F2F7),
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: IntrinsicHeight(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16, isSmallScreen ? 12 : 20, 16, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _topBar(),
+                        if (isSkipActive && skippedPeriods.isNotEmpty) _skipInfoCard(isSmallScreen),
+                        const Spacer(flex: 1),
+                        _timeHeroCard(isSmallScreen),
+                        const Spacer(flex: 2),
+                        _primaryActionCard(isSmallScreen),
+                        const Spacer(flex: 2),
+                        _sectionTitle("Quick Actions"),
+                        const SizedBox(height: 12),
+                        _quickActionsRow(isSmallScreen),
+                        const Spacer(flex: 2),
+                        _secondaryActionCard(isSmallScreen),
+                        const Spacer(flex: 2),
+                        _emergencyCard(isSmallScreen),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _skipInfoCard(bool isSmall) {
+    if (skippedPeriods.isEmpty) return const SizedBox.shrink();
+    
+    return Column(
+      children: skippedPeriods.map((period) => Container(
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.orange.withAlpha((255 * 0.1).round()),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.orange.withAlpha((255 * 0.2).round())),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.notifications_paused_rounded, color: Colors.orange, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("SKIPPING BELL",
+                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.orange, letterSpacing: 1)),
+                  Text(
+                    "${period['title']} at ${period['startTime']}",
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => _handleRedoSpecificSkip(period),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.orange,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text("REDO", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
+            ),
+          ],
+        ),
+      )).toList(),
+    );
+  }
+
+  void _showSkipSelectionSheet() {
+    int toMinutes(String timeStr) {
+      final parts = timeStr.split(':');
+      return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+    }
+    
+    final now = TimeOfDay.now();
+    final nowM = now.hour * 60 + now.minute;
+    
+    final futurePeriods = todayPeriods.where((p) {
+      int pStart = toMinutes(p['startTime']);
+      bool alreadySkipped = skippedPeriods.any((s) => s['id'] == p['id'] && s['startTime'] == p['startTime']);
+      if (alreadySkipped) return false;
+
+      return pStart > nowM || (p['@logicalStart'] != null && pStart < toMinutes(p['@logicalStart']));
+    }).toList();
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Skip Next Bell", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            const Text("Select a scheduled bell you want to skip:", style: TextStyle(color: Colors.grey, fontSize: 14)),
+            const SizedBox(height: 20),
+            if (futurePeriods.isEmpty)
+              const Center(child: Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text("No more available periods to skip.")))
+            else
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: futurePeriods.length,
+                  itemBuilder: (context, i) {
+                    final p = futurePeriods[i];
+                    return ListTile(
+                      leading: const CircleAvatar(backgroundColor: Color(0xFFF2F2F7), child: Icon(Icons.notifications_off_rounded, color: Colors.orange, size: 20)),
+                      title: Text(p['title'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text("Rings at ${p['startTime']}"),
+                      trailing: const Icon(Icons.add_circle_outline_rounded, color: Color(0xFF007AFF)),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _applySkip(p);
+                      },
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _applySkip(Map<String, dynamic> period) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final time = period['startTime']; 
+      await Esp32ApiService.sendRaw("\$SKIP,$time#");
+      
+      if (mounted) {
+        setState(() {
+          skippedPeriods.add(period);
+        });
+        messenger.showSnackBar(SnackBar(content: Text("Added skip for ${period['title']} at $time"), behavior: SnackBarBehavior.floating));
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text("Unable to skip bell: $e"), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  void _handleRedoSpecificSkip(Map<String, dynamic> period) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final time = period['startTime'];
+      await Esp32ApiService.sendRaw("\$SKIPCANCEL,$time#");
+      
+      if (mounted) {
+        setState(() {
+          skippedPeriods.removeWhere((p) => p['id'] == period['id'] && p['startTime'] == period['startTime']);
+        });
+        messenger.showSnackBar(SnackBar(content: Text("Restored bell: ${period['title']} at $time"), behavior: SnackBarBehavior.floating));
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text("Unable to restore bell: $e"), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  void _handleRedoSkip() {
+    if (skippedPeriods.isNotEmpty) {
+      _handleRedoSpecificSkip(skippedPeriods.last);
+    }
+  }
+
+  Widget _topBar() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                (orgName != null && orgName!.isNotEmpty) ? orgName! : "SyncroBell",
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
+                  color: Colors.black,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _isDeviceConnected ? Colors.green : Colors.red,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _isDeviceConnected ? "Connected to SyncroBell" : "Not connected to device",
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: _isDeviceConnected ? Colors.green : Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Material(
+              color: Colors.white,
+              shape: const CircleBorder(),
+              elevation: 2,
+              shadowColor: Colors.black.withAlpha((255 * 0.05).round()),
+              child: IconButton(
+                onPressed: () async {
+                  final connected = await Esp32ApiService.checkConnection();
+                  if (mounted) {
+                    setState(() => _isDeviceConnected = connected);
+                    DeviceScheduleManagerSheet.show(context);
+                  }
+                },
+                icon: Icon(
+                  _isDeviceConnected ? Icons.router_rounded : Icons.wifi_find_rounded,
+                  color: _isDeviceConnected ? const Color(0xFF34C759) : Colors.red,
+                  size: 22,
+                ),
+                splashRadius: 24,
+                tooltip: _isDeviceConnected ? "Machine Schedules" : "Connect Device",
+              ),
+            ),
+            const SizedBox(width: 10),
+            Material(
+              color: Colors.white,
+              shape: const CircleBorder(),
+              elevation: 2,
+              shadowColor: Colors.black.withAlpha((255 * 0.05).round()),
+              child: IconButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SettingsPage()),
+                  ).then((_) => _init());
+                },
+                icon: const Icon(Icons.settings_rounded, color: Color(0xFF007AFF), size: 22),
+                splashRadius: 24,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _timeHeroCard(bool isSmall) {
+    return Container(
+      padding: EdgeInsets.all(isSmall ? 16 : 24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [BoxShadow(color: Colors.black.withAlpha((255 * 0.03).round()), blurRadius: 10, offset: const Offset(0, 4))],
+      ),
+      child: Column(
+        children: [
+          SizedBox(
+            height: isSmall ? 80 : 120,
+            child: Lottie.asset(
+              'assets/lottie/clock.json',
+              repeat: true,
+            ),
+          ),
+          SizedBox(height: isSmall ? 8 : 12),
+          Text(
+            time,
+            style: TextStyle(
+              fontSize: isSmall ? 48 : 64,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -1.5,
+              color: Colors.black,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            nextPeriodInfo,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF6E6E73),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _primaryActionCard(bool isSmall) {
+    return _iosNavCard(
+      icon: Icons.calendar_today_rounded,
+      title: hasSchedule ? "View Today’s Schedule" : "Create Schedule",
+      isSmall: isSmall,
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) =>
+            hasSchedule ? const TodaySchedulePage() : const CreateCategoryPage(),
+            settings: RouteSettings(name: hasSchedule ? 'TodaySchedulePage' : 'CreateCategoryPage'),
+          ),
+        ).then((_) => _init());
+      },
+    );
+  }
+
+  Widget _quickActionsRow(bool isSmall) {
+    return Row(
+      children: [
+        _quickAction(
+          "Skip",
+          Icons.skip_next_rounded,
+          isSkipActive ? _handleRedoSkip : _showSkipSelectionSheet,
+          isSmall,
+          color: isSkipActive ? Colors.orange : const Color(0xFF007AFF),
+        ),
+        const SizedBox(width: 10),
+        _quickAction("Voice", Icons.campaign_rounded, () {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => const AnnouncementPage()));
+        }, isSmall),
+        const SizedBox(width: 10),
+        _quickAction("Vol", Icons.volume_up_rounded, _showVolumeDialog, isSmall),
+        const SizedBox(width: 10),
+        _quickAction("Ring", Icons.touch_app_rounded, _showManualRingDurationDialog, isSmall),
+      ],
+    );
+  }
+
+  Widget _quickAction(String label, IconData icon, VoidCallback onTap, bool isSmall, {Color color = const Color(0xFF007AFF)}) {
+    return Expanded(
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            padding: EdgeInsets.symmetric(vertical: isSmall ? 14 : 18),
+            child: Column(
+              children: [
+                Icon(icon, size: isSmall ? 22 : 26, color: color),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                )
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showVolumeDialog() {
+    int localVolume = currentVolume;
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+          title: const Text("Device Volume", style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.volume_up_rounded, size: 64, color: Color(0xFF007AFF)),
+              const SizedBox(height: 20),
+              Text("$localVolume%", style: const TextStyle(fontSize: 48, fontWeight: FontWeight.w700)),
+              Slider(
+                value: localVolume.toDouble(),
+                min: 0,
+                max: 100,
+                divisions: 100,
+                onChanged: (value) => setDialogState(() => localVolume = value.toInt()),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+            ElevatedButton(
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                setState(() => currentVolume = localVolume);
+                Navigator.pop(context);
+                try {
+                  await Esp32ApiService.sendRaw("\$V,$currentVolume#");
+                } catch (e) {
+                  messenger.showSnackBar(SnackBar(content: Text("Unable to reach SyncroBell: $e"), backgroundColor: Colors.red));
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF007AFF),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text("APPLY"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showManualRingDurationDialog() {
+    int selectedDuration = 0;
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+          title: const Text("Manual Ring", style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text("Set how long the bell should ring:"),
+              const SizedBox(height: 20),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: [0, 10, 20, 30].map((dur) {
+                  return ChoiceChip(
+                    label: Text(dur == 0 ? "Full" : "${dur}s"),
+                    selected: selectedDuration == dur,
+                    onSelected: (selected) {
+                      if (selected) setDialogState(() => selectedDuration = dur);
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                selectedDuration == 0 ? "Full Audio Duration" : "$selectedDuration Seconds",
+                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: Color(0xFF007AFF)),
+              ),
+              Slider(
+                value: selectedDuration.toDouble(),
+                min: 0,
+                max: 120,
+                divisions: 120,
+                onChanged: (value) => setDialogState(() => selectedDuration = value.toInt()),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+            ElevatedButton(
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                Navigator.pop(context);
+                try {
+                  await Esp32ApiService.sendRaw("\$D,$selectedDuration#");
+                  await Future.delayed(const Duration(milliseconds: 100));
+                  await Esp32ApiService.playFile("SchoolBell.mp3");
+                } catch (e) {
+                  messenger.showSnackBar(SnackBar(content: Text("Unable to reach SyncroBell: $e"), backgroundColor: Colors.red));
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF007AFF),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text("RING NOW"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _secondaryActionCard(bool isSmall) {
+    return _iosNavCard(
+      icon: Icons.settings_rounded,
+      title: "Manage Schedules",
+      isSmall: isSmall,
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const CategoryListPage(),
+            settings: const RouteSettings(name: 'CategoryListPage'),
+          ),
+        ).then((_) => _init());
+      },
+    );
+  }
+
+  Widget _iosNavCard({
+    required IconData icon,
+    required String title,
+    required bool isSmall,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(24),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(24),
+        child: Container(
+          padding: EdgeInsets.all(isSmall ? 16 : 20),
+          child: Row(
+            children: [
+              Icon(icon, size: isSmall ? 22 : 26, color: const Color(0xFF007AFF)),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: isSmall ? 15 : 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right,
+                size: 22,
+                color: Color(0xFFAEAEB2),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _emergencyCard(bool isSmall) {
+    return Material(
+      color: const Color(0xFFFF3B30),
+      borderRadius: BorderRadius.circular(28),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(28),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const EmergencyPage()),
+          );
+        },
+        child: Container(
+          padding: EdgeInsets.symmetric(vertical: isSmall ? 16 : 22),
+          child: const Center(
+            child: Text(
+              "EMERGENCY",
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.1,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 20,
+        fontWeight: FontWeight.w700,
+        letterSpacing: -0.3,
+        color: Colors.black,
+      ),
+    );
+  }
+}

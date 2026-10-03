@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import '../../services/esp32_api_service.dart';
 
 class EmergencyPage extends StatefulWidget {
   const EmergencyPage({super.key});
@@ -9,8 +9,6 @@ class EmergencyPage extends StatefulWidget {
 }
 
 class _EmergencyPageState extends State<EmergencyPage> {
-  static const String espIp = "192.168.4.1"; // Make sure this IP is correct
-
   bool _isSending = false;
   Timer? _longPressTimer;
   bool _isPressing = false;
@@ -22,28 +20,19 @@ class _EmergencyPageState extends State<EmergencyPage> {
   }
 
 
-  /// Generic function to send a command to the ESP32.
+  /// Sends a command to the ESP32 via TCP Socket.
   Future<void> _sendCommand(String command, String successMessage) async {
-    // Prevent sending a new command while one is already in progress.
     if (_isSending) return;
 
     setState(() => _isSending = true);
 
     try {
-      final res = await http.post(
-        Uri.parse("http://$espIp/emergency/trigger"),
-        body: command, // Send the specific command provided.
-      ).timeout(const Duration(seconds: 5)); // Add a timeout for robustness.
-
-      if (res.statusCode == 200) {
-        _showMessage(successMessage);
-      } else {
-        _showMessage("ESP32 error: Status code ${res.statusCode}", error: true);
-      }
+      // The service handles connection and command termination
+      await Esp32ApiService.sendRaw(command);
+      _showMessage(successMessage);
     } catch (e) {
-      _showMessage("Failed to connect to ESP32: $e", error: true);
+      _showMessage("SyncroBell device not reachable. Please check your connection.", error: true);
     } finally {
-      // Ensure the UI is updated only if the widget is still mounted.
       if (mounted) {
         setState(() => _isSending = false);
       }
@@ -57,14 +46,13 @@ class _EmergencyPageState extends State<EmergencyPage> {
 
     setState(() => _isPressing = true);
 
-    // After 3 seconds, send the 'ON' command.
+    // After 3 seconds, send the 'ON' command ($E#)
     _longPressTimer = Timer(const Duration(seconds: 3), () {
-      _sendCommand("\$E,on#", "🚨 Emergency Activated");
-      _cancelLongPress(); // Reset the UI after the command is sent.
+      _sendCommand("\$E#", "🚨 Emergency Activated");
+      _cancelLongPress(); 
     });
   }
 
-  // --- MODIFIED ---
   /// Cancels the long press timer if the user releases their finger early.
   void _cancelLongPress() {
     _longPressTimer?.cancel();
@@ -73,14 +61,11 @@ class _EmergencyPageState extends State<EmergencyPage> {
     }
   }
 
-  // --- ADDED ---
-  /// Handles a quick tap to turn the siren OFF.
+  /// Handles a quick tap to turn the siren OFF ($E,OFF#).
   void _quickTap() {
-    // A quick tap only happens if the long press timer is still active (i.e., not yet fired).
-    // This prevents the 'off' command from firing right after the 'on' command.
     if (_longPressTimer?.isActive ?? false) {
-      _cancelLongPress(); // Cancel the long press 'on' action.
-      _sendCommand("\$E,off#", "✅ Emergency Deactivated");
+      _cancelLongPress();
+      _sendCommand("\$E,OFF#", "✅ Emergency Deactivated");
     }
   }
 
@@ -89,7 +74,7 @@ class _EmergencyPageState extends State<EmergencyPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
-        backgroundColor: error ? Colors.green : Theme.of(context).colorScheme.primary,
+        backgroundColor: error ? Colors.red : Colors.green,
       ),
     );
   }
@@ -100,16 +85,16 @@ class _EmergencyPageState extends State<EmergencyPage> {
       appBar: AppBar(
         title: const Text("Emergency"),
         backgroundColor: Colors.red,
+        foregroundColor: Colors.white,
       ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // --- MODIFIED GestureDetector ---
             GestureDetector(
-              onTapDown: (_) => _startLongPressTimer(), // Start the timer on press down
-              onTapUp: (_) => _quickTap(), // A quick release triggers the 'off' command
-              onTapCancel: _cancelLongPress, // Also cancel if the gesture is interrupted
+              onTapDown: (_) => _startLongPressTimer(), 
+              onTapUp: (_) => _quickTap(), 
+              onTapCancel: _cancelLongPress, 
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 300),
                 width: 220,
@@ -135,7 +120,7 @@ class _EmergencyPageState extends State<EmergencyPage> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        Icons.notifications_active, // Bell Icon
+                        Icons.notifications_active, 
                         color: Colors.white,
                         size: 60,
                       ),
@@ -154,7 +139,6 @@ class _EmergencyPageState extends State<EmergencyPage> {
               ),
             ),
             const SizedBox(height: 40),
-            // --- MODIFIED Text ---
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 32.0),
               child: Text(

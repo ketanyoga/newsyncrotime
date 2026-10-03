@@ -194,6 +194,7 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
+import '../../services/esp32_api_service.dart';
 
 class AnnouncementPage extends StatefulWidget {
   const AnnouncementPage({super.key});
@@ -228,19 +229,23 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
         path: path,
       );
 
-      setState(() {
-        _isRecording = true;
-        _recordedFile = File(path);
-      });
+      if (mounted) {
+        setState(() {
+          _isRecording = true;
+          _recordedFile = File(path);
+        });
+      }
     }
   }
 
   Future<void> stopRecording() async {
     final path = await _recorder.stop();
 
-    setState(() {
-      _isRecording = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isRecording = false;
+      });
+    }
 
     if (path != null) {
       _recordedFile = File(path);
@@ -252,39 +257,43 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
   // =========================
 
   Future<void> sendRecordedAnnouncement({
-    required String espIp,
-    required int espPort,
     required File wavFile,
   }) async {
-    setState(() => _isSending = true);
+    if (mounted) {
+      setState(() => _isSending = true);
+    }
 
     try {
       final bytes = await wavFile.readAsBytes();
       final fileSize = bytes.length;
 
-      final socket = await Socket.connect(espIp, espPort);
-
+      // 1. Send the command to prepare for announcement
       final cmd = "\$A,announce.wav,$fileSize#";
-      socket.add(cmd.codeUnits);
-      await socket.flush();
+      await Esp32ApiService.sendRaw(cmd);
 
-      // Wait for READY (with timeout protection)
-      await socket.timeout(
-        const Duration(seconds: 10),
-      ).firstWhere((data) =>
-          String.fromCharCodes(data).contains("ANNOUNCE READY"));
+      // 2. Wait for the "READY" response from ESP32
+      final readyResp = await Esp32ApiService.waitForAnyResponse(
+        ["ANNOUNCE READY", "READY", "ERROR"],
+        timeout: const Duration(seconds: 10),
+      );
+      if (readyResp.contains("ERROR")) {
+        throw Exception("Hardware error: $readyResp");
+      }
 
+      // 3. Send the file bytes in chunks
       const chunkSize = 1024;
       int offset = 0;
 
       while (offset < bytes.length) {
         final end = (offset + chunkSize).clamp(0, bytes.length);
-        socket.add(bytes.sublist(offset, end));
+        final chunk = bytes.sublist(offset, end);
+        
+        await Esp32ApiService.sendBytes(chunk);
+        
         offset = end;
-        await socket.flush();
+        // Optional: Small delay to prevent overwhelming the ESP32 buffer
+        await Future.delayed(const Duration(milliseconds: 10));
       }
-
-      socket.destroy();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -299,7 +308,9 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
       }
     }
 
-    setState(() => _isSending = false);
+    if (mounted) {
+      setState(() => _isSending = false);
+    }
   }
 
   // =========================
@@ -310,7 +321,7 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("ESP32 Announcement"),
+        title: const Text("Voice Announcement"),
         centerTitle: true,
       ),
       body: Center(
@@ -377,8 +388,6 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                       ? null
                       : () async {
                     await sendRecordedAnnouncement(
-                      espIp: "192.168.4.1",
-                      espPort: 23,
                       wavFile: _recordedFile!,
                     );
                   },
@@ -387,7 +396,7 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                     color: Colors.white,
                   )
                       : const Text(
-                    "Send to Syncrotime",
+                    "Play Announcement",
                     style: TextStyle(fontSize: 16),
                   ),
                 ),

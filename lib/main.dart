@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'database/dashboard_page.dart';
+import 'pages/splashscreen.dart';
 
 void main() {
-  // Ensures that Flutter's widget binding is ready before running the app.
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
 }
@@ -13,17 +12,13 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Synncrotime',
+      title: 'SyncroBell',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primarySwatch: Colors.blue,
-        // Using ColorScheme for more modern theming
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueAccent),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF007AFF)),
         useMaterial3: true,
       ),
-      // Set the SplashScreen as the entry point of the app.
-      // The SplashScreen will then handle navigating to the DashboardPage.
-      home: const DashboardPage(),
+      home: const SplashScreen(),
     );
   }
 }
