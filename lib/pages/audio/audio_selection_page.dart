@@ -169,6 +169,66 @@ class RingtoneSelectionPageState extends State<RingtoneSelectionPage> {
     }
   }
 
+  Future<void> _deleteUserRingtone(String path) async {
+    final fileName = _getFileName(path);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text("Delete Imported Audio?"),
+        content: Text("Are you sure you want to delete '$fileName' from imported sounds?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("CANCEL"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text("DELETE"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      if (_currentlyPlaying == path) {
+        await _audioPlayer.stop();
+        _currentlyPlaying = null;
+      }
+
+      _selectedPaths.remove(path);
+      _deviceRingtones.remove(path);
+
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> saved = prefs.getStringList('user_imported_ringtones') ?? [];
+      saved.remove(path);
+      await prefs.setStringList('user_imported_ringtones', saved);
+
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+
+      if (!mounted) return;
+      setState(() {});
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Deleted '$fileName'")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error deleting file: $e"), backgroundColor: Colors.red),
+      );
+    }
+  }
+
   void _handleSelection(String path) {
     setState(() {
       if (widget.selectSingle) {
@@ -378,6 +438,12 @@ class RingtoneSelectionPageState extends State<RingtoneSelectionPage> {
                       iconSize: 32,
                       onPressed: () => _togglePlayback(path),
                     ),
+                    if (_activeTab == 'device')
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+                        tooltip: "Delete Audio",
+                        onPressed: () => _deleteUserRingtone(path),
+                      ),
                   ],
                 ),
               ),

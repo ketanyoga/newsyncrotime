@@ -24,7 +24,6 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
   bool _fetching = true;
   List<Map<String, dynamic>> _discoveredCategories = [];
   Map<int, List<String>> _discoveredSchedules = {};
-  Map<int, List<DateTime>> _discoveredHolidays = {};
   Map<String, dynamic>? _previewingCat;
   String _selectedDayCode = "M";
 
@@ -142,7 +141,6 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
         setState(() {
           _discoveredCategories = cats;
           _discoveredSchedules = scheds;
-          _discoveredHolidays = hols;
           _importedSeqs.addAll(alreadyImportedSeqs);
           _fetching = false;
         });

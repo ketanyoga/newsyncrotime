@@ -30,8 +30,11 @@ class _TodaySchedulePageState extends State<TodaySchedulePage> {
     final today = DateTime(now.year, now.month, now.day);
     final String currentDay = DateFormat('EEEE').format(now);
 
-    // 1. Get all active and synced categories
-    final categoriesRes = await db.query('categories', where: 'synced = 1');
+    // 1. Get all active and synced categories (fallback to all categories if none marked synced)
+    var categoriesRes = await db.query('categories', where: 'synced = 1');
+    if (categoriesRes.isEmpty) {
+      categoriesRes = await db.query('categories');
+    }
     final List<int> activeCategoryIds = [];
 
     for (var cat in categoriesRes) {
@@ -277,6 +280,13 @@ class _TodaySchedulePageState extends State<TodaySchedulePage> {
       bool connected = await Esp32ApiService.checkConnection();
       if (connected) {
         await Esp32ApiService.sendRaw(command);
+        // Mark as SYNCED in local database
+        await db.update(
+          'categories',
+          {'synced': 1},
+          where: 'id = ?',
+          whereArgs: [categoryId],
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sync completed successfully!"), backgroundColor: Colors.green));
         }

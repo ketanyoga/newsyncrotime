@@ -30,7 +30,8 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
   Map<String, dynamic>? nextPeriodData; 
   List<Map<String, dynamic>> todayPeriods = []; 
   List<Map<String, dynamic>> skippedPeriods = []; // Store multiple skipped periods
-  bool get isSkipActive => skippedPeriods.isNotEmpty;
+  bool _isEntireDaySkipped = false;
+  bool get isSkipActive => _isEntireDaySkipped || skippedPeriods.isNotEmpty;
   Timer? timer;
   bool hasSchedule = false;
   int currentVolume = 70;
@@ -115,9 +116,6 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     final categoriesRes = await db.query('categories');
     for (var row in categoriesRes) {
       try {
-        final synced = row['synced'] as int? ?? 0;
-        if (synced != 1) continue; // Must be synced to hardware device!
-
         final start = DateTime.parse(row['startDate'] as String);
         final end = DateTime.parse(row['endDate'] as String);
         
@@ -306,8 +304,52 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
   }
 
   Widget _skipInfoCard(bool isSmall) {
-    if (skippedPeriods.isEmpty) return const SizedBox.shrink();
-    
+    if (skippedPeriods.isEmpty && !_isEntireDaySkipped) return const SizedBox.shrink();
+
+    final bool isEntireDay = _isEntireDaySkipped ||
+        (todayPeriods.isNotEmpty && skippedPeriods.length >= todayPeriods.length);
+
+    if (isEntireDay) {
+      return Container(
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.orange.withAlpha((255 * 0.1).round()),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.orange.withAlpha((255 * 0.2).round())),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.event_busy_rounded, color: Colors.orange, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("SKIPPING ENTIRE DAY",
+                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.orange, letterSpacing: 1)),
+                  Text(
+                    "All ${todayPeriods.length} bells for today are skipped",
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: _handleRedoEntireDay,
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.orange,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text("UNDO", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Column(
       children: skippedPeriods.map((period) => Container(
         margin: const EdgeInsets.only(top: 12),
@@ -342,12 +384,340 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: const Text("REDO", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
+              child: const Text("UNDO", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
             ),
           ],
         ),
       )).toList(),
     );
+  }
+
+  String _getTodayHardwareDayCode() {
+    final now = DateTime.now();
+    switch (now.weekday) {
+      case DateTime.sunday: return "U";
+      case DateTime.monday: return "M";
+      case DateTime.tuesday: return "T";
+      case DateTime.wednesday: return "W";
+      case DateTime.thursday: return "H";
+      case DateTime.friday: return "F";
+      case DateTime.saturday: return "S";
+      default: return "M";
+    }
+  }
+
+  void _skipEntireDay() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final dayCode = _getTodayHardwareDayCode();
+    try {
+      await Esp32ApiService.sendRaw("\$DEL,$dayCode#");
+      
+      if (mounted) {
+        setState(() {
+          _isEntireDaySkipped = true;
+          skippedPeriods.clear();
+          skippedPeriods.addAll(todayPeriods);
+        });
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text("Entire day's schedule skipped on device!"),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text("Unable to skip entire day: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _skipSpecificDate() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final db = await _dbFuture;
+    final activeIds = await _getActiveCategoryIds(db);
+
+    List<int> catSkippedDays = [0]; // Default Sunday
+    List<DateTime> localDates = [];
+
+    // Load active category skippedDays and skippedDates
+    for (int catId in activeIds) {
+      final catRes = await db.query('categories', where: 'id = ?', whereArgs: [catId]);
+      if (catRes.isNotEmpty) {
+        final cat = catRes.first;
+        final daysStr = cat['skippedDays'] as String? ?? "0";
+        catSkippedDays = daysStr
+            .split(',')
+            .where((s) => s.isNotEmpty)
+            .map(int.parse)
+            .toList();
+
+        final datesStr = cat['skippedDates'] as String? ?? "";
+        final dates = datesStr
+            .split(',')
+            .where((s) => s.isNotEmpty)
+            .map(DateTime.parse)
+            .toList();
+        for (var d in dates) {
+          if (!localDates.any((existing) => existing.year == d.year && existing.month == d.month && existing.day == d.day)) {
+            localDates.add(d);
+          }
+        }
+      }
+    }
+
+    // Save a copy of initial dates to detect newly added dates
+    final List<DateTime> initialDates = List.from(localDates);
+
+    if (!mounted) return;
+
+    DateTime viewMonth = DateTime.now();
+
+    final List<DateTime>? selectedDates = await showDialog<List<DateTime>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final int daysInMonth = DateTime(viewMonth.year, viewMonth.month + 1, 0).day;
+          final int firstDayOffset = DateTime(viewMonth.year, viewMonth.month, 1).weekday % 7;
+          final List<String> weekdays = ["S", "M", "T", "W", "T", "F", "S"];
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Select Holidays", style: TextStyle(fontWeight: FontWeight.bold)),
+                TextButton(
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text("All Selected Dates"),
+                        content: SizedBox(
+                          width: double.maxFinite,
+                          child: localDates.isEmpty
+                              ? const Text("No dates selected.")
+                              : ListView.builder(
+                                  shrinkWrap: true,
+                                  itemCount: localDates.length,
+                                  itemBuilder: (ctx, index) {
+                                    return ListTile(
+                                      title: Text(DateFormat('EEEE, dd MMMM yyyy').format(localDates[index])),
+                                      leading: const Icon(Icons.event, color: Colors.red),
+                                    );
+                                  },
+                                ),
+                        ),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CLOSE")),
+                        ],
+                      ),
+                    );
+                  },
+                  child: Text("View All (${localDates.length})", style: const TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 350,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Month Navigator
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.chevron_left),
+                          onPressed: () => setDialogState(() => viewMonth = DateTime(viewMonth.year, viewMonth.month - 1)),
+                        ),
+                        Expanded(
+                          child: Text(
+                            DateFormat('MMMM yyyy').format(viewMonth),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.chevron_right),
+                          onPressed: () => setDialogState(() => viewMonth = DateTime(viewMonth.year, viewMonth.month - 1)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    // Weekday Header
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: weekdays
+                            .map((d) => Expanded(
+                                  child: Center(
+                                      child: Text(d,
+                                          style: TextStyle(
+                                              color: (d == "S") ? Colors.redAccent : Colors.grey,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12))),
+                                ))
+                            .toList(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    // Calendar Grid
+                    GridView.count(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      crossAxisCount: 7,
+                      children: [
+                        ...List.generate(firstDayOffset, (_) => const SizedBox.shrink()),
+                        ...List.generate(daysInMonth, (i) {
+                          final day = i + 1;
+                          final date = DateTime(viewMonth.year, viewMonth.month, day);
+                          
+                          int weekdayForSkip = date.weekday % 7; 
+                          final bool isSkippedDay = catSkippedDays.contains(weekdayForSkip);
+                          
+                          final bool isManuallySelected = localDates.any((d) => d.year == date.year && d.month == date.month && d.day == date.day);
+
+                          final bool shouldShowRed = isSkippedDay || isManuallySelected;
+
+                          return GestureDetector(
+                            onTap: () {
+                              if (isSkippedDay) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("This day is already skipped in 'Skip Days' settings."), duration: Duration(seconds: 1)),
+                                );
+                                return;
+                              }
+                              
+                              setDialogState(() {
+                                if (isManuallySelected) {
+                                  localDates.removeWhere(
+                                      (d) => d.year == date.year && d.month == date.month && d.day == date.day);
+                                } else {
+                                  localDates.add(date);
+                                  localDates.sort();
+                                }
+                              });
+                            },
+                            child: Container(
+                              alignment: Alignment.center,
+                              margin: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: shouldShowRed ? Colors.red : Colors.transparent,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Text(
+                                "$day",
+                                style: TextStyle(
+                                  color: shouldShowRed ? Colors.white : Colors.black,
+                                  fontWeight: shouldShowRed ? FontWeight.bold : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, null),
+                child: const Text("CANCEL", style: TextStyle(color: Color(0xFF8E8E93))),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, localDates),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF007AFF),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text("SAVE & SEND TO DEVICE"),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (selectedDates == null) return;
+
+    try {
+      // 1. Identify newly added dates that were not in initialDates
+      final newlyAddedDates = selectedDates.where((d) =>
+        !initialDates.any((existing) =>
+          existing.year == d.year && existing.month == d.month && existing.day == d.day
+        )
+      ).toList();
+
+      // 2. Save full updated dates to local SQLite database
+      final datesIsoStr = selectedDates.map((d) => d.toIso8601String()).join(',');
+      for (int catId in activeIds) {
+        await db.update('categories', {'skippedDates': datesIsoStr}, where: 'id = ?', whereArgs: [catId]);
+      }
+
+      // 3. Send ONLY newly added dates to the ESP32 device memory
+      if (newlyAddedDates.isNotEmpty) {
+        for (final d in newlyAddedDates) {
+          final formattedDate = DateFormat('dd/MM/yy').format(d);
+          int slotIndex = selectedDates.indexWhere((existing) =>
+            existing.year == d.year && existing.month == d.month && existing.day == d.day
+          );
+          if (slotIndex == -1) slotIndex = selectedDates.length - 1;
+          final slotNum = (slotIndex + 1).clamp(1, 10).toString().padLeft(2, '0');
+
+          await Esp32ApiService.sendRaw("\$H,$slotNum,$formattedDate#");
+          
+          // Wait for acknowledgment handshake from ESP32
+          try {
+            await Esp32ApiService.waitForAnyResponse(["OK: H", "OK", "ERROR"], timeout: const Duration(seconds: 3));
+          } catch (_) {}
+
+          await Future.delayed(const Duration(milliseconds: 150));
+        }
+
+        if (mounted) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text("Added ${newlyAddedDates.length} new holiday date(s) to device!"),
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: Colors.green,
+            ),
+          );
+          _init();
+        }
+      } else {
+        if (mounted) {
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text("Holiday dates updated locally!"),
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: Colors.green,
+            ),
+          );
+          _init();
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text("Failed to send holiday dates: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   void _showSkipSelectionSheet() {
@@ -374,39 +744,120 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
       builder: (context) => Container(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text("Skip Next Bell", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 8),
-            const Text("Select a scheduled bell you want to skip:", style: TextStyle(color: Colors.grey, fontSize: 14)),
-            const SizedBox(height: 20),
-            if (futurePeriods.isEmpty)
-              const Center(child: Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Text("No more available periods to skip.")))
-            else
-              ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: futurePeriods.length,
-                  itemBuilder: (context, i) {
-                    final p = futurePeriods[i];
-                    return ListTile(
-                      leading: const CircleAvatar(backgroundColor: Color(0xFFF2F2F7), child: Icon(Icons.notifications_off_rounded, color: Colors.orange, size: 20)),
-                      title: Text(p['title'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text("Rings at ${p['startTime']}"),
-                      trailing: const Icon(Icons.add_circle_outline_rounded, color: Color(0xFF007AFF)),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _applySkip(p);
-                      },
-                    );
-                  },
-                ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Skip Schedule Options", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
               ),
-            const SizedBox(height: 24),
-          ],
+              const SizedBox(height: 12),
+              
+              // --- QUICK SKIP CARDS ---
+              Row(
+                children: [
+                  Expanded(
+                    child: Card(
+                      elevation: 0,
+                      color: Colors.orange.shade50,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        side: BorderSide(color: Colors.orange.shade200),
+                      ),
+                      child: InkWell(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _skipEntireDay();
+                        },
+                        borderRadius: BorderRadius.circular(16),
+                        child: const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.event_busy_rounded, color: Colors.orange, size: 28),
+                              SizedBox(height: 8),
+                              Text("Skip Entire Day", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              SizedBox(height: 2),
+                              Text("Cancel today's bells", style: TextStyle(fontSize: 11, color: Colors.grey)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Card(
+                      elevation: 0,
+                      color: Colors.blue.shade50,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        side: BorderSide(color: Colors.blue.shade200),
+                      ),
+                      child: InkWell(
+                        onTap: () {
+                          Navigator.pop(context);
+                          _skipSpecificDate();
+                        },
+                        borderRadius: BorderRadius.circular(16),
+                        child: const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.calendar_month_rounded, color: Color(0xFF007AFF), size: 28),
+                              SizedBox(height: 8),
+                              Text("Skip Date", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              SizedBox(height: 2),
+                              Text("Calendar holiday", style: TextStyle(fontSize: 11, color: Colors.grey)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 20),
+              const Text("Skip Specific Bell Time", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black87)),
+              const SizedBox(height: 8),
+
+              if (futurePeriods.isEmpty)
+                const Center(child: Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Text("No more available periods to skip today.")))
+              else
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.35),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: futurePeriods.length,
+                    itemBuilder: (context, i) {
+                      final p = futurePeriods[i];
+                      return ListTile(
+                        leading: const CircleAvatar(backgroundColor: Color(0xFFF2F2F7), child: Icon(Icons.notifications_off_rounded, color: Colors.orange, size: 20)),
+                        title: Text(p['title'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text("Rings at ${p['startTime']}"),
+                        trailing: const Icon(Icons.add_circle_outline_rounded, color: Color(0xFF007AFF)),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _applySkip(p);
+                        },
+                      );
+                    },
+                  ),
+                ),
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
       ),
     );
@@ -439,6 +890,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
       
       if (mounted) {
         setState(() {
+          _isEntireDaySkipped = false;
           skippedPeriods.removeWhere((p) => p['id'] == period['id'] && p['startTime'] == period['startTime']);
         });
         messenger.showSnackBar(SnackBar(content: Text("Restored bell: ${period['title']} at $time"), behavior: SnackBarBehavior.floating));
@@ -450,8 +902,44 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     }
   }
 
+  void _handleRedoEntireDay() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      for (final period in todayPeriods) {
+        final time = period['startTime'];
+        await Esp32ApiService.sendRaw("\$SKIPCANCEL,$time#");
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      
+      if (mounted) {
+        setState(() {
+          _isEntireDaySkipped = false;
+          skippedPeriods.clear();
+        });
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text("Restored today's entire schedule!"),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text("Unable to restore schedule: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   void _handleRedoSkip() {
-    if (skippedPeriods.isNotEmpty) {
+    if (_isEntireDaySkipped || (todayPeriods.isNotEmpty && skippedPeriods.length >= todayPeriods.length)) {
+      _handleRedoEntireDay();
+    } else if (skippedPeriods.isNotEmpty) {
       _handleRedoSpecificSkip(skippedPeriods.last);
     }
   }
@@ -688,7 +1176,8 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                 setState(() => currentVolume = localVolume);
                 Navigator.pop(context);
                 try {
-                  await Esp32ApiService.sendRaw("\$V,$currentVolume#");
+                  final espVol = ((currentVolume * 30) / 100).round().clamp(0, 30);
+                  await Esp32ApiService.sendRaw("\$V,$espVol#");
                 } catch (e) {
                   messenger.showSnackBar(SnackBar(content: Text("Unable to reach SyncroBell: $e"), backgroundColor: Colors.red));
                 }
