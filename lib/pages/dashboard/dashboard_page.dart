@@ -6,6 +6,7 @@ import 'package:lottie/lottie.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../services/esp32_api_service.dart';
+import '../../services/bell_mqtt_service.dart';
 import '../../database/app_database.dart';
 import '../announcement/announcement_page.dart';
 import '../category/category_list_page.dart';
@@ -46,14 +47,15 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _dbFuture = AppDB.instance.database;
-    _isDeviceConnected = Esp32ApiService.isConnected;
-    _connectionSub = Esp32ApiService.connectionStateStream.listen((connected) {
+    _isDeviceConnected = BellMqttService.isConnected;
+    _connectionSub = BellMqttService.online.listen((connected) {
       if (mounted) {
         setState(() {
           _isDeviceConnected = connected;
         });
       }
     });
+    BellMqttService.connect().catchError((_) {});
     _init();
   }
 
@@ -65,10 +67,12 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
   }
 
   Future<void> _checkConnectionAndInit() async {
-    final connected = await Esp32ApiService.checkConnection();
+    try {
+      await BellMqttService.connect();
+    } catch (_) {}
     if (mounted) {
       setState(() {
-        _isDeviceConnected = connected;
+        _isDeviceConnected = BellMqttService.isConnected;
       });
       _init();
     }
@@ -81,7 +85,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     if (mounted) {
       setState(() {
         orgName = prefs.getString('org_name');
-        _isDeviceConnected = Esp32ApiService.isConnected;
+        _isDeviceConnected = BellMqttService.isConnected;
       });
     }
 
@@ -410,7 +414,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     final messenger = ScaffoldMessenger.of(context);
     final dayCode = _getTodayHardwareDayCode();
     try {
-      await Esp32ApiService.sendRaw("\$DEL,$dayCode#");
+      await BellMqttService.sendCommand("\$DEL,$dayCode#");
       
       if (mounted) {
         setState(() {
@@ -867,7 +871,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     final messenger = ScaffoldMessenger.of(context);
     try {
       final time = period['startTime']; 
-      await Esp32ApiService.sendRaw("\$SKIP,$time#");
+      await BellMqttService.sendCommand("\$SKIP,$time#");
       
       if (mounted) {
         setState(() {
@@ -886,7 +890,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     final messenger = ScaffoldMessenger.of(context);
     try {
       final time = period['startTime'];
-      await Esp32ApiService.sendRaw("\$SKIPCANCEL,$time#");
+      await BellMqttService.sendCommand("\$SKIPCANCEL,$time#");
       
       if (mounted) {
         setState(() {
@@ -907,7 +911,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     try {
       for (final period in todayPeriods) {
         final time = period['startTime'];
-        await Esp32ApiService.sendRaw("\$SKIPCANCEL,$time#");
+        await BellMqttService.sendCommand("\$SKIPCANCEL,$time#");
         await Future.delayed(const Duration(milliseconds: 50));
       }
       
@@ -999,9 +1003,11 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
               shadowColor: Colors.black.withAlpha((255 * 0.05).round()),
               child: IconButton(
                 onPressed: () async {
-                  final connected = await Esp32ApiService.checkConnection();
+                  try {
+                    await BellMqttService.connect();
+                  } catch (_) {}
                   if (mounted) {
-                    setState(() => _isDeviceConnected = connected);
+                    setState(() => _isDeviceConnected = BellMqttService.isConnected);
                     DeviceScheduleManagerSheet.show(context);
                   }
                 },
@@ -1177,7 +1183,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                 Navigator.pop(context);
                 try {
                   final espVol = ((currentVolume * 30) / 100).round().clamp(0, 30);
-                  await Esp32ApiService.sendRaw("\$V,$espVol#");
+                  await BellMqttService.sendCommand("\$V,$espVol#");
                 } catch (e) {
                   messenger.showSnackBar(SnackBar(content: Text("Unable to reach SyncroBell: $e"), backgroundColor: Colors.red));
                 }
@@ -1243,9 +1249,9 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                 final messenger = ScaffoldMessenger.of(context);
                 Navigator.pop(context);
                 try {
-                  await Esp32ApiService.sendRaw("\$D,$selectedDuration#");
+                  await BellMqttService.sendCommand("\$D,$selectedDuration#");
                   await Future.delayed(const Duration(milliseconds: 100));
-                  await Esp32ApiService.playFile("SchoolBell.mp3");
+                  await BellMqttService.sendCommand("\$T,SchoolBell.mp3#");
                 } catch (e) {
                   messenger.showSnackBar(SnackBar(content: Text("Unable to reach SyncroBell: $e"), backgroundColor: Colors.red));
                 }
