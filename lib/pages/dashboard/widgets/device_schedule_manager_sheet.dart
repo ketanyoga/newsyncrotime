@@ -472,7 +472,7 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: const Color(0xFF007AFF).withOpacity(0.1),
+                  backgroundColor: const Color(0xFF007AFF).withValues(alpha: 0.1),
                   child: Text("$seq", style: const TextStyle(color: Color(0xFF007AFF), fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(width: 16),

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'pages/splashscreen.dart';
+import 'services/esp32_api_service.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Esp32ApiService.loadSavedIp();
+  Esp32ApiService.init();
   runApp(const MyApp());
 }
 
@@ -97,6 +100,10 @@ class MyApp extends StatelessWidget {
         }
 
         final int fileSize = fileBytes.length;
+        const maxSizeBytes = 10 * 1024 * 1024; // 10MB
+        if (fileSize > maxSizeBytes) {
+          throw Exception('Audio file "$fileName" exceeds 10MB limit (${(fileSize / (1024 * 1024)).toStringAsFixed(1)}MB). Device max size is 10MB.');
+        }
 
         // ---- CONNECT SOCKET ----
         final socket = await Socket.connect(
@@ -160,7 +167,7 @@ class MyApp extends StatelessWidget {
             .timeout(const Duration(seconds: 10));
 
         // ---- SEND BINARY DATA (NO DELAYS) ----
-        const int chunkSize = 1024;
+        const int chunkSize = 8192;
         int offset = 0;
 
         while (offset < fileBytes.length) {

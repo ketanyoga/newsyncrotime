@@ -157,7 +157,8 @@ class _CategoryListPageState extends State<CategoryListPage> {
     if (ringtonePath == null || ringtonePath.trim().isEmpty) {
       return "default.mp3";
     }
-    return ringtonePath.split(r'\').last.split('/').last;
+    final name = ringtonePath.split(r'\').last.split('/').last;
+    return name.replaceAll(',', '-');
   }
 
   Future<void> _performFullSync(CategoryModel cat, int sequence) async {
@@ -201,10 +202,12 @@ class _CategoryListPageState extends State<CategoryListPage> {
       commandsToReview.add('\$P,$sequence,$dayCode,$pairs#');
     }
 
+    if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
 
     String status = "Connecting to SyncroBell...";
+    double uploadProgress = 0.0;
     bool started = false;
     bool dialogMounted = true;
     if (!mounted) return;
@@ -257,7 +260,7 @@ class _CategoryListPageState extends State<CategoryListPage> {
                 }
 
                 // 2. Perform regular upload if missing
-                updateState(() => status = "Uploading ($currentFile/$totalFiles):\n$fileName");
+                updateState(() => status = "Uploading ($currentFile/$totalFiles):\n$fileName (0%)");
 
                 Uint8List bytes;
                 if (path.startsWith('assets/')) {
@@ -265,6 +268,11 @@ class _CategoryListPageState extends State<CategoryListPage> {
                   bytes = data.buffer.asUint8List();
                 } else {
                   bytes = await File(path).readAsBytes();
+                }
+
+                const maxSizeBytes = 10 * 1024 * 1024; // 10MB
+                if (bytes.length > maxSizeBytes) {
+                  throw Exception("Audio file '$fileName' exceeds 10MB limit (${(bytes.length / (1024 * 1024)).toStringAsFixed(1)}MB). Device max size is 10MB.");
                 }
 
                 await Esp32ApiService.sendRaw('\$FILE,$fileName,${bytes.length}#');
@@ -276,7 +284,23 @@ class _CategoryListPageState extends State<CategoryListPage> {
                   throw Exception("Hardware error: $readyResp");
                 }
 
-                await Esp32ApiService.sendBytes(bytes);
+                const chunkSize = 8192;
+                int offset = 0;
+                while (offset < bytes.length) {
+                  final end = (offset + chunkSize).clamp(0, bytes.length);
+                  final chunk = bytes.sublist(offset, end);
+                  await Esp32ApiService.sendBytes(chunk);
+                  offset = end;
+                  
+                  uploadProgress = offset / bytes.length;
+                  int pct = (uploadProgress * 100).toInt();
+                  updateState(() {
+                    status = "Uploading ($currentFile/$totalFiles):\n$fileName ($pct%)";
+                  });
+
+                  await Future.delayed(const Duration(milliseconds: 30));
+                }
+
                 updateState(() => status = "Saving ($currentFile/$totalFiles):\n$fileName");
                 final saveResp = await Esp32ApiService.waitForAnyResponse(
                   ["SUCCESS", "WARNING", "ERROR"],
@@ -335,8 +359,15 @@ class _CategoryListPageState extends State<CategoryListPage> {
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (!status.startsWith("ERROR")) const CircularProgressIndicator(),
-                  const SizedBox(height: 20),
+                  if (!status.startsWith("ERROR")) ...[
+                    if (status.startsWith("Uploading")) ...[
+                      LinearProgressIndicator(value: uploadProgress),
+                      const SizedBox(height: 16),
+                    ] else ...[
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 20),
+                    ],
+                  ],
                   Text(status, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14)),
                 ],
               ),
@@ -435,9 +466,10 @@ class _CategoryListPageState extends State<CategoryListPage> {
             icon: const Icon(Icons.wifi_tethering, color: Color(0xFF007AFF)),
             tooltip: 'Check Connection',
             onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
               bool ok = await Esp32ApiService.checkConnection();
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                messenger.showSnackBar(SnackBar(
                   content: Text(ok ? "Connected to SyncroBell!" : "Connection Failed"),
                   backgroundColor: ok ? Colors.green : Colors.red,
                 ));
@@ -635,7 +667,7 @@ class _CategoryListPageState extends State<CategoryListPage> {
           icon: const Icon(Icons.sync_rounded),
           tooltip: "Re-Sync to Device",
           style: IconButton.styleFrom(
-            backgroundColor: Colors.orange.withOpacity(0.15),
+            backgroundColor: Colors.orange.withValues(alpha: 0.15),
             foregroundColor: Colors.orange,
             padding: const EdgeInsets.all(14),
           ),

@@ -136,6 +136,19 @@ class RingtoneSelectionPageState extends State<RingtoneSelectionPage> {
         final file = File(originalPath);
         if (!await file.exists()) return;
 
+        final fileSize = await file.length();
+        const maxSizeBytes = 10 * 1024 * 1024; // 10MB
+        if (fileSize > maxSizeBytes) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Warning: "$originalPath" is ${(fileSize / (1024 * 1024)).toStringAsFixed(1)}MB. Device max size is 10MB.'),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+
         final appDir = await getApplicationDocumentsDirectory();
         final fileName = originalPath.split('/').last.split(r'\').last;
         final targetPath = '${appDir.path}/$fileName';
@@ -523,7 +536,7 @@ class RingtoneSelectionPageState extends State<RingtoneSelectionPage> {
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -5))],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, -5))],
       ),
       child: Row(
         children: [

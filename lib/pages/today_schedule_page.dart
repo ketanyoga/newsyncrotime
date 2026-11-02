@@ -271,7 +271,8 @@ class _TodaySchedulePageState extends State<TodaySchedulePage> {
       
       String _getRingtoneName(String? path) {
         if (path == null || path.isEmpty) return "default.mp3";
-        return path.split('/').last;
+        final name = path.split(r'\').last.split('/').last;
+        return name.replaceAll(',', '-');
       }
 
       final pairs = allDayPeriods.map((p) => '${p['startTime']},${_getRingtoneName(p['ringtone'] as String?)}').join('!');

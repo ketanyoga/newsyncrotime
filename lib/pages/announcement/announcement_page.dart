@@ -208,6 +208,8 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
 
   bool _isRecording = false;
   bool _isSending = false;
+  double _uploadProgress = 0.0;
+  String _sendStatus = "Sending Announcement...";
   File? _recordedFile;
 
   // =========================
@@ -281,7 +283,7 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
       }
 
       // 3. Send the file bytes in chunks
-      const chunkSize = 1024;
+      const chunkSize = 2000;
       int offset = 0;
 
       while (offset < bytes.length) {
@@ -291,8 +293,23 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
         await Esp32ApiService.sendBytes(chunk);
         
         offset = end;
-        // Optional: Small delay to prevent overwhelming the ESP32 buffer
-        await Future.delayed(const Duration(milliseconds: 10));
+        _uploadProgress = offset / bytes.length;
+        int pct = (_uploadProgress * 100).toInt();
+        if (mounted) {
+          setState(() {
+            _sendStatus = "Sending Announcement ($pct%)";
+          });
+        }
+        await Future.delayed(const Duration(milliseconds: 5));
+      }
+
+      // 4. Wait for SUCCESS or ERROR confirmation from ESP32
+      final saveResp = await Esp32ApiService.waitForAnyResponse(
+        ["SUCCESS", "WARNING", "ERROR"],
+        timeout: const Duration(seconds: 30),
+      );
+      if (saveResp.contains("ERROR")) {
+        throw Exception("Hardware save error: $saveResp");
       }
 
       if (mounted) {
@@ -392,13 +409,21 @@ class _AnnouncementPageState extends State<AnnouncementPage> {
                     );
                   },
                   child: _isSending
-                      ? const CircularProgressIndicator(
-                    color: Colors.white,
-                  )
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              LinearProgressIndicator(value: _uploadProgress, color: Colors.white),
+                              const SizedBox(height: 4),
+                              Text(_sendStatus, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                            ],
+                          ),
+                        )
                       : const Text(
-                    "Play Announcement",
-                    style: TextStyle(fontSize: 16),
-                  ),
+                          "Play Announcement",
+                          style: TextStyle(fontSize: 16),
+                        ),
                 ),
               ),
             ],

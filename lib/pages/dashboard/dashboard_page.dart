@@ -6,7 +6,7 @@ import 'package:lottie/lottie.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../services/esp32_api_service.dart';
-import '../../services/bell_mqtt_service.dart';
+import '../../services/device_discovery_service.dart';
 import '../../database/app_database.dart';
 import '../announcement/announcement_page.dart';
 import '../category/category_list_page.dart';
@@ -47,15 +47,15 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _dbFuture = AppDB.instance.database;
-    _isDeviceConnected = BellMqttService.isConnected;
-    _connectionSub = BellMqttService.online.listen((connected) {
+    _isDeviceConnected = Esp32ApiService.isConnected;
+    _connectionSub = Esp32ApiService.connectionStateStream.listen((connected) {
       if (mounted) {
         setState(() {
           _isDeviceConnected = connected;
         });
       }
     });
-    BellMqttService.connect().catchError((_) {});
+    Esp32ApiService.checkConnection().catchError((_) => false);
     _init();
   }
 
@@ -67,12 +67,10 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
   }
 
   Future<void> _checkConnectionAndInit() async {
-    try {
-      await BellMqttService.connect();
-    } catch (_) {}
+    final connected = await Esp32ApiService.checkConnection();
     if (mounted) {
       setState(() {
-        _isDeviceConnected = BellMqttService.isConnected;
+        _isDeviceConnected = connected;
       });
       _init();
     }
@@ -85,7 +83,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     if (mounted) {
       setState(() {
         orgName = prefs.getString('org_name');
-        _isDeviceConnected = BellMqttService.isConnected;
+        _isDeviceConnected = Esp32ApiService.isConnected;
       });
     }
 
@@ -414,7 +412,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     final messenger = ScaffoldMessenger.of(context);
     final dayCode = _getTodayHardwareDayCode();
     try {
-      await BellMqttService.sendCommand("\$DEL,$dayCode#");
+      await Esp32ApiService.sendRaw("\$DEL,$dayCode#");
       
       if (mounted) {
         setState(() {
@@ -871,7 +869,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     final messenger = ScaffoldMessenger.of(context);
     try {
       final time = period['startTime']; 
-      await BellMqttService.sendCommand("\$SKIP,$time#");
+      await Esp32ApiService.sendRaw("\$SKIP,$time#");
       
       if (mounted) {
         setState(() {
@@ -890,7 +888,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     final messenger = ScaffoldMessenger.of(context);
     try {
       final time = period['startTime'];
-      await BellMqttService.sendCommand("\$SKIPCANCEL,$time#");
+      await Esp32ApiService.sendRaw("\$SKIPCANCEL,$time#");
       
       if (mounted) {
         setState(() {
@@ -911,7 +909,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
     try {
       for (final period in todayPeriods) {
         final time = period['startTime'];
-        await BellMqttService.sendCommand("\$SKIPCANCEL,$time#");
+        await Esp32ApiService.sendRaw("\$SKIPCANCEL,$time#");
         await Future.delayed(const Duration(milliseconds: 50));
       }
       
@@ -1003,11 +1001,9 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
               shadowColor: Colors.black.withAlpha((255 * 0.05).round()),
               child: IconButton(
                 onPressed: () async {
-                  try {
-                    await BellMqttService.connect();
-                  } catch (_) {}
+                  final connected = await Esp32ApiService.checkConnection();
                   if (mounted) {
-                    setState(() => _isDeviceConnected = BellMqttService.isConnected);
+                    setState(() => _isDeviceConnected = connected);
                     DeviceScheduleManagerSheet.show(context);
                   }
                 },
@@ -1018,6 +1014,19 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                 ),
                 splashRadius: 24,
                 tooltip: _isDeviceConnected ? "Machine Schedules" : "Connect Device",
+              ),
+            ),
+            const SizedBox(width: 10),
+            Material(
+              color: Colors.white,
+              shape: const CircleBorder(),
+              elevation: 2,
+              shadowColor: Colors.black.withAlpha((255 * 0.05).round()),
+              child: IconButton(
+                onPressed: _showDeviceScannerDialog,
+                icon: const Icon(Icons.cast_connected_rounded, color: Color(0xFF007AFF), size: 22),
+                splashRadius: 24,
+                tooltip: "Add / Scan Device (IP Mode)",
               ),
             ),
             const SizedBox(width: 10),
@@ -1040,6 +1049,125 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
           ],
         ),
       ],
+    );
+  }
+
+  void _showDeviceScannerDialog() {
+    List<DiscoveredDevice> discovered = [];
+    bool isScanning = false;
+    final ipController = TextEditingController(text: Esp32ApiService.espIp);
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          title: const Text("Add & Connect Device (IP Mode)", style: TextStyle(fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 320,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text("Scan local network for SyncroBell devices or enter IP manually:"),
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  onPressed: isScanning ? null : () async {
+                    setDialogState(() {
+                      isScanning = true;
+                      discovered.clear();
+                    });
+                    final devices = await DeviceDiscoveryService.scanDevices();
+                    setDialogState(() {
+                      discovered = devices;
+                      isScanning = false;
+                    });
+                  },
+                  icon: isScanning 
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.radar_rounded),
+                  label: Text(isScanning ? "Scanning Network..." : "Scan for Devices"),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF007AFF), foregroundColor: Colors.white),
+                ),
+                const SizedBox(height: 16),
+                if (discovered.isNotEmpty) ...[
+                  const Text("Discovered Devices:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 160),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: discovered.length,
+                      itemBuilder: (context, index) {
+                        final d = discovered[index];
+                        return Card(
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          child: ListTile(
+                            dense: true,
+                            leading: const Icon(Icons.router_rounded, color: Color(0xFF34C759)),
+                            title: Text("${d.id} (${d.ip})", style: const TextStyle(fontWeight: FontWeight.bold)),
+                            subtitle: Text("Port: ${d.port}"),
+                            trailing: ElevatedButton(
+                              onPressed: () async {
+                                await Esp32ApiService.setDeviceIp(d.ip);
+                                final connected = await Esp32ApiService.checkConnection();
+                                if (!context.mounted) return;
+                                if (mounted) {
+                                  setState(() => _isDeviceConnected = connected);
+                                }
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text("Connected to ${d.id} (${d.ip})"), backgroundColor: Colors.green),
+                                );
+                              },
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 12)),
+                              child: const Text("Connect"),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const Divider(height: 24),
+                ],
+                const Text("Or Enter IP Manually (IP Mode):", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: ipController,
+                  decoration: InputDecoration(
+                    labelText: "Device IP Address (e.g. 192.168.4.1)",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    isDense: true,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: () async {
+                    final ip = ipController.text.trim();
+                    if (ip.isNotEmpty) {
+                      await Esp32ApiService.setDeviceIp(ip);
+                      final connected = await Esp32ApiService.checkConnection();
+                      if (!context.mounted) return;
+                      if (mounted) {
+                        setState(() => _isDeviceConnected = connected);
+                      }
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(connected ? "Connected to $ip" : "Saved $ip (Connecting...)"), backgroundColor: connected ? Colors.green : Colors.orange),
+                      );
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF007AFF), foregroundColor: Colors.white),
+                  child: const Text("Save & Connect via IP"),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Close")),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1183,7 +1311,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                 Navigator.pop(context);
                 try {
                   final espVol = ((currentVolume * 30) / 100).round().clamp(0, 30);
-                  await BellMqttService.sendCommand("\$V,$espVol#");
+                  await Esp32ApiService.sendRaw("\$V,$espVol#");
                 } catch (e) {
                   messenger.showSnackBar(SnackBar(content: Text("Unable to reach SyncroBell: $e"), backgroundColor: Colors.red));
                 }
@@ -1249,9 +1377,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                 final messenger = ScaffoldMessenger.of(context);
                 Navigator.pop(context);
                 try {
-                  await BellMqttService.sendCommand("\$D,$selectedDuration#");
-                  await Future.delayed(const Duration(milliseconds: 100));
-                  await BellMqttService.sendCommand("\$T,SchoolBell.mp3#");
+                  await Esp32ApiService.manualRing(selectedDuration);
                 } catch (e) {
                   messenger.showSnackBar(SnackBar(content: Text("Unable to reach SyncroBell: $e"), backgroundColor: Colors.red));
                 }

@@ -836,7 +836,7 @@ class _GeneralSchedulePageState extends State<GeneralSchedulePage> {
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -5))],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, -5))],
       ),
       child: ElevatedButton(
         onPressed: canGenerate ? _saveAndGenerate : null,
