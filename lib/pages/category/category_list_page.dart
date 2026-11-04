@@ -7,11 +7,14 @@ import 'package:intl/intl.dart';
 import '../../database/app_database.dart';
 import '../../models/category_model.dart';
 import '../../models/period_model.dart';
+import '../../models/device_zone.dart';
 import '../general/general_schedule_page.dart';
 import '../week/week_schedule_page.dart';
 import '../dashboard/dashboard_page.dart';
 import '../dashboard/widgets/device_schedule_manager_sheet.dart';
 import '../../services/esp32_api_service.dart';
+import '../../services/zone_command_service.dart';
+import '../../services/bell_mqtt_service.dart';
 import 'create_category_page.dart';
 import 'edit_category_page.dart';
 
@@ -227,106 +230,106 @@ class _CategoryListPageState extends State<CategoryListPage> {
 
           Future<void> run() async {
             try {
-              updateState(() => status = "Connecting...");
-              bool connected = await Esp32ApiService.checkConnection();
-              if (!connected) throw Exception("Could not connect. Please check SyncroBell Wi-Fi.");
+              final targets = await ZoneCommandService.getTargetIdentifiers();
+              int totalDevices = targets.length;
+              int currentDev = 0;
 
-              int totalFiles = uniqueRingtones.length;
-              int currentFile = 0;
+              for (final target in targets) {
+                currentDev++;
+                updateState(() => status = "Device $currentDev/$totalDevices ($target):\nConnecting...");
 
-              for (final path in uniqueRingtones) {
-                currentFile++;
-                final fileName = _getRingtoneName(path);
-
-                // 1. SMART CHECK: Ask hardware if file already exists
-                updateState(() => status = "Checking ($currentFile/$totalFiles):\n$fileName");
-                await Esp32ApiService.sendRaw('\$CHECK,$fileName#');
-                
-                String checkResult = "";
-                try {
-                   // Hardware responds with "EXISTS" or "MISSING"
-                   checkResult = await Esp32ApiService.waitForAnyResponse(
-                     ["EXISTS", "MISSING"],
-                     timeout: const Duration(seconds: 3),
-                   );
-                } catch (e) {
-                   debugPrint("Check timeout for $fileName, assuming missing. $e");
-                   checkResult = "MISSING";
-                }
-
-                if (checkResult.contains("EXISTS")) {
-                  debugPrint("Smart Sync: Skipping $fileName (Already on device)");
-                  continue;
-                }
-
-                // 2. Perform regular upload if missing
-                updateState(() => status = "Uploading ($currentFile/$totalFiles):\n$fileName (0%)");
-
-                Uint8List bytes;
-                if (path.startsWith('assets/')) {
-                  final data = await rootBundle.load(path);
-                  bytes = data.buffer.asUint8List();
+                if (target.contains('.')) {
+                  await Esp32ApiService.setDeviceIp(target);
+                  bool connected = await Esp32ApiService.checkConnection();
+                  if (!connected) throw Exception("Could not connect to IP $target.");
                 } else {
-                  bytes = await File(path).readAsBytes();
+                  BellMqttService.deviceId = target;
+                  await BellMqttService.connect();
+                  if (!BellMqttService.isConnected) throw Exception("Could not connect to MQTT device $target.");
                 }
 
-                const maxSizeBytes = 10 * 1024 * 1024; // 10MB
-                if (bytes.length > maxSizeBytes) {
-                  throw Exception("Audio file '$fileName' exceeds 10MB limit (${(bytes.length / (1024 * 1024)).toStringAsFixed(1)}MB). Device max size is 10MB.");
-                }
+                int totalFiles = uniqueRingtones.length;
+                int currentFile = 0;
 
-                await Esp32ApiService.sendRaw('\$FILE,$fileName,${bytes.length}#');
-                final readyResp = await Esp32ApiService.waitForAnyResponse(
-                  ["READY", "ERROR"],
-                  timeout: const Duration(seconds: 15),
-                );
-                if (readyResp.contains("ERROR")) {
-                  throw Exception("Hardware error: $readyResp");
-                }
+                for (final path in uniqueRingtones) {
+                  currentFile++;
+                  final fileName = _getRingtoneName(path);
 
-                const chunkSize = 8192;
-                int offset = 0;
-                while (offset < bytes.length) {
-                  final end = (offset + chunkSize).clamp(0, bytes.length);
-                  final chunk = bytes.sublist(offset, end);
-                  await Esp32ApiService.sendBytes(chunk);
-                  offset = end;
+                  updateState(() => status = "Device $currentDev/$totalDevices: Checking ($currentFile/$totalFiles):\n$fileName");
                   
-                  uploadProgress = offset / bytes.length;
-                  int pct = (uploadProgress * 100).toInt();
-                  updateState(() {
-                    status = "Uploading ($currentFile/$totalFiles):\n$fileName ($pct%)";
-                  });
+                  if (target.contains('.')) {
+                    await Esp32ApiService.sendRaw('\$CHECK,$fileName#');
+                  } else {
+                    await BellMqttService.sendCommandToDevice(target, '\$CHECK,$fileName#');
+                  }
 
-                  await Future.delayed(const Duration(milliseconds: 30));
+                  String checkResult = "";
+                  try {
+                     checkResult = await Esp32ApiService.waitForAnyResponse(["EXISTS", "MISSING"], timeout: const Duration(seconds: 3));
+                  } catch (_) {
+                     checkResult = "MISSING";
+                  }
+
+                  if (checkResult.contains("EXISTS")) continue;
+
+                  updateState(() => status = "Device $currentDev/$totalDevices: Uploading ($currentFile/$totalFiles):\n$fileName (0%)");
+
+                  Uint8List bytes;
+                  if (path.startsWith('assets/')) {
+                    final data = await rootBundle.load(path);
+                    bytes = data.buffer.asUint8List();
+                  } else {
+                    bytes = await File(path).readAsBytes();
+                  }
+
+                  if (target.contains('.')) {
+                    await Esp32ApiService.sendRaw('\$FILE,$fileName,${bytes.length}#');
+                    final readyResp = await Esp32ApiService.waitForAnyResponse(["READY", "ERROR"], timeout: const Duration(seconds: 15));
+                    if (readyResp.contains("ERROR")) throw Exception("Hardware error: $readyResp");
+
+                    const chunkSize = 8192;
+                    int offset = 0;
+                    while (offset < bytes.length) {
+                      final end = (offset + chunkSize).clamp(0, bytes.length);
+                      final chunk = bytes.sublist(offset, end);
+                      await Esp32ApiService.sendBytes(chunk);
+                      offset = end;
+                      uploadProgress = offset / bytes.length;
+                      int pct = (uploadProgress * 100).toInt();
+                      updateState(() => status = "Device $currentDev/$totalDevices: Uploading ($currentFile/$totalFiles):\n$fileName ($pct%)");
+                      await Future.delayed(const Duration(milliseconds: 30));
+                    }
+                  } else {
+                    await BellMqttService.sendCommandToDevice(target, '\$FILE,$fileName,${bytes.length}#');
+                    await Future.delayed(const Duration(milliseconds: 300));
+
+                    const chunkSize = 2000;
+                    int offset = 0;
+                    while (offset < bytes.length) {
+                      final end = (offset + chunkSize).clamp(0, bytes.length);
+                      final chunk = bytes.sublist(offset, end);
+                      await BellMqttService.sendFileBytesToDevice(target, chunk);
+                      offset = end;
+                      uploadProgress = offset / bytes.length;
+                      int pct = (uploadProgress * 100).toInt();
+                      updateState(() => status = "MQTT Device $currentDev/$totalDevices: Uploading ($currentFile/$totalFiles):\n$fileName ($pct%)");
+                      await Future.delayed(const Duration(milliseconds: 10));
+                    }
+                  }
+
+                  updateState(() => status = "Device $currentDev/$totalDevices: Saving ($currentFile/$totalFiles):\n$fileName");
+                  await Future.delayed(const Duration(milliseconds: 600));
                 }
 
-                updateState(() => status = "Saving ($currentFile/$totalFiles):\n$fileName");
-                final saveResp = await Esp32ApiService.waitForAnyResponse(
-                  ["SUCCESS", "WARNING", "ERROR"],
-                  timeout: const Duration(seconds: 20),
-                );
-                if (saveResp.contains("ERROR")) {
-                  throw Exception("Hardware save error: $saveResp");
+                updateState(() => status = "Device $currentDev/$totalDevices: Updating Schedule...");
+                for (var cmd in commandsToReview) {
+                  if (target.contains('.')) {
+                    await Esp32ApiService.sendRaw(cmd);
+                  } else {
+                    await BellMqttService.sendCommandToDevice(target, cmd);
+                  }
+                  await Future.delayed(const Duration(milliseconds: 100));
                 }
-                await Future.delayed(const Duration(milliseconds: 300));
-              }
-
-              updateState(() => status = "Updating Schedule...");
-              for (var cmd in commandsToReview) {
-                List<String> expected = ["OK:"]; 
-                if (cmd.startsWith("\$R")) expected = ["RTC OK", "OK:"];
-                if (cmd.startsWith("\$C,")) expected = ["OK: C", "OK:"]; 
-                if (cmd.startsWith("\$H,")) expected = ["OK: H", "OK:"];
-                if (cmd.startsWith("\$P,")) expected = ["OK: P", "OK:"];
-
-                await Esp32ApiService.sendRaw(cmd);
-                try {
-                  await Esp32ApiService.waitForAnyResponse(expected, timeout: const Duration(seconds: 5));
-                } catch (e) {
-                  debugPrint("Handshake warning: $e");
-                }
-                await Future.delayed(const Duration(milliseconds: 100));
               }
 
               await db.update('categories', {'synced': 1}, where: 'id = ?', whereArgs: [cat.id]);
@@ -644,7 +647,7 @@ class _CategoryListPageState extends State<CategoryListPage> {
       return _actionButton(
         "SYNC TO DEVICE",
         Colors.orange,
-        () => _performFullSync(cat, sequence),
+        () => _handleSyncTap(cat, sequence),
       );
     }
     return Row(
@@ -671,9 +674,58 @@ class _CategoryListPageState extends State<CategoryListPage> {
             foregroundColor: Colors.orange,
             padding: const EdgeInsets.all(14),
           ),
-          onPressed: () => _performFullSync(cat, sequence),
+          onPressed: () => _handleSyncTap(cat, sequence),
         ),
       ],
+    );
+  }
+
+  Future<void> _handleSyncTap(CategoryModel cat, int sequence) async {
+    final zones = await DeviceZone.loadZones();
+    if (zones.isEmpty) {
+      if (!mounted) return;
+      await _performFullSync(cat, sequence);
+      return;
+    }
+
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Choose Sync Target", style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _performFullSync(cat, sequence);
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF007AFF), foregroundColor: Colors.white),
+              child: const Text("Sync to Single Current Device"),
+            ),
+            const SizedBox(height: 12),
+            const Text("Or Sync to a Device Zone:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+            const SizedBox(height: 8),
+            ...zones.map((z) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: OutlinedButton(
+                onPressed: () async {
+                  Navigator.pop(context);
+                  ZoneCommandService.activeZone = z;
+                  await _performFullSync(cat, sequence);
+                },
+                child: Text("Sync to Zone: ${z.name} (${z.ipAddresses.length + z.deviceIds.length} devices)"),
+              ),
+            )),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+        ],
+      ),
     );
   }
 

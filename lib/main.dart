@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'pages/splashscreen.dart';
 import 'services/esp32_api_service.dart';
+import 'services/bell_mqtt_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Esp32ApiService.loadSavedIp();
+  await BellMqttService.loadSavedDeviceConfig();
   Esp32ApiService.init();
   runApp(const MyApp());
 }

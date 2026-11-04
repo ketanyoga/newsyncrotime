@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../../database/app_database.dart';
 import '../../../services/esp32_api_service.dart';
+import '../../../services/bell_mqtt_service.dart';
+import '../../../models/device_zone.dart';
 
 class DeviceScheduleManagerSheet extends StatefulWidget {
   const DeviceScheduleManagerSheet({super.key});
@@ -27,6 +30,29 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
   Map<String, dynamic>? _previewingCat;
   String _selectedDayCode = "M";
 
+  String _selectedTarget = "Default (Connected Device)";
+  List<DeviceZone> _savedZones = [];
+
+  List<String> get _availableTargets {
+    final Set<String> targets = {};
+    targets.add("Default (Connected Device)");
+    for (final id in BellMqttService.onlineMqttDevices) {
+      targets.add("MQTT: $id");
+    }
+    for (final z in _savedZones) {
+      for (final id in z.deviceIds) {
+        targets.add("MQTT: $id");
+      }
+      for (final ip in z.ipAddresses) {
+        targets.add(ip);
+      }
+    }
+    if (!targets.contains(_selectedTarget)) {
+      targets.add(_selectedTarget);
+    }
+    return targets.toList();
+  }
+
   final Set<int> _importingSeqs = {};
   final Set<int> _importedSeqs = {};
 
@@ -43,41 +69,91 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
   @override
   void initState() {
     super.initState();
+    _loadZonesAndFetch();
+  }
+
+  Future<void> _loadZonesAndFetch() async {
+    final zones = await DeviceZone.loadZones();
+    if (mounted) {
+      setState(() => _savedZones = zones);
+    }
     _fetchDeviceData();
   }
 
   Future<void> _fetchDeviceData() async {
     setState(() {
-      _status = "Connecting to SyncroBell...";
+      _status = "Connecting to target machine...";
       _fetching = true;
+      _discoveredCategories.clear();
+      _discoveredSchedules.clear();
     });
 
     try {
-      bool connected = await Esp32ApiService.checkConnection();
-      if (!connected) {
-        throw Exception("Cannot reach SyncroBell Wi-Fi (192.168.4.1). Please connect your Wi-Fi.");
-      }
-
       final List<String> lines = [];
       bool finished = false;
 
-      // Attach listener FIRST before sending command
-      final sub = Esp32ApiService.listen().listen((msg) {
-        if (msg.contains("EXPORT_DONE")) {
-          finished = true;
-        }
-        // Split multi-line TCP packet by newlines
-        final rawLines = msg.split(RegExp(r'[\r\n]+'));
-        for (var l in rawLines) {
-          l = l.trim();
-          if (l.startsWith("\$")) {
-            lines.add(l);
-          }
-        }
-      });
+      StreamSubscription<String>? sub;
 
-      setState(() => _status = "Requesting schedules from device...");
-      await Esp32ApiService.sendRaw("\$EXPORT#");
+      if (_selectedTarget.startsWith("MQTT:")) {
+        final deviceId = _selectedTarget.replaceFirst("MQTT: ", "").trim();
+        BellMqttService.deviceId = deviceId;
+        await BellMqttService.connect();
+        
+        sub = BellMqttService.responses.listen((msg) {
+          if (msg.contains("EXPORT_DONE")) {
+            finished = true;
+          }
+          final rawLines = msg.split(RegExp(r'[\r\n]+'));
+          for (var l in rawLines) {
+            l = l.trim();
+            if (l.startsWith("\$")) {
+              lines.add(l);
+            }
+          }
+        });
+
+        setState(() => _status = "Requesting schedules via MQTT ($deviceId)...");
+        await BellMqttService.sendCommand("\$EXPORT#");
+      } else if (_selectedTarget.contains('.')) {
+        await Esp32ApiService.setDeviceIp(_selectedTarget);
+        bool connected = await Esp32ApiService.checkConnection();
+        if (!connected) throw Exception("Cannot reach IP $_selectedTarget.");
+
+        sub = Esp32ApiService.listen().listen((msg) {
+          if (msg.contains("EXPORT_DONE")) {
+            finished = true;
+          }
+          final rawLines = msg.split(RegExp(r'[\r\n]+'));
+          for (var l in rawLines) {
+            l = l.trim();
+            if (l.startsWith("\$")) {
+              lines.add(l);
+            }
+          }
+        });
+
+        setState(() => _status = "Requesting schedules via IP ($_selectedTarget)...");
+        await Esp32ApiService.sendRaw("\$EXPORT#");
+      } else {
+        bool connected = await Esp32ApiService.checkConnection();
+        if (!connected) throw Exception("Cannot reach SyncroBell device.");
+
+        sub = Esp32ApiService.listen().listen((msg) {
+          if (msg.contains("EXPORT_DONE")) {
+            finished = true;
+          }
+          final rawLines = msg.split(RegExp(r'[\r\n]+'));
+          for (var l in rawLines) {
+            l = l.trim();
+            if (l.startsWith("\$")) {
+              lines.add(l);
+            }
+          }
+        });
+
+        setState(() => _status = "Requesting schedules from device...");
+        await Esp32ApiService.sendRaw("\$EXPORT#");
+      }
 
       int waited = 0;
       while (!finished && waited < 80) {
@@ -123,7 +199,6 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
         }
       }
 
-      // Query local database for existing category names to mark as imported
       final db = await AppDB.instance.database;
       final localCats = await db.query('categories', columns: ['name']);
       final localNames = localCats.map((c) => (c['name'] as String).trim().toLowerCase()).toSet();
@@ -161,7 +236,7 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: const Text("Delete from Machine?"),
-        content: Text("Are you sure you want to delete category '$name' (Slot $seq) from SyncroBell device memory?"),
+        content: Text("Are you sure you want to delete category '$name' (Slot $seq) from target machine?"),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("CANCEL")),
           ElevatedButton(
@@ -176,7 +251,16 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
     if (confirm != true) return;
 
     try {
-      await Esp32ApiService.sendRaw("\$DELC,$seq#");
+      if (_selectedTarget.startsWith("MQTT:")) {
+        final deviceId = _selectedTarget.replaceFirst("MQTT: ", "").trim();
+        await BellMqttService.sendCommandToDevice(deviceId, "\$DELC,$seq#");
+      } else if (_selectedTarget.contains('.')) {
+        await Esp32ApiService.setDeviceIp(_selectedTarget);
+        await Esp32ApiService.sendRaw("\$DELC,$seq#");
+      } else {
+        await Esp32ApiService.sendRaw("\$DELC,$seq#");
+      }
+
       if (mounted) {
         setState(() {
           _discoveredCategories.removeWhere((c) => c['seq'] == seq);
@@ -309,7 +393,7 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
       );
     } else {
       return IconButton(
-        icon: const Icon(Icons.download_rounded, color: Colors.green),
+        icon: Icon(Icons.download_rounded, color: Colors.green),
         tooltip: "Import to App",
         onPressed: () => _importCategoryToApp(cat),
       );
@@ -366,7 +450,7 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: MediaQuery.of(context).size.height * 0.8,
+      height: MediaQuery.of(context).size.height * 0.85,
       decoration: const BoxDecoration(
         color: Color(0xFFF2F2F7),
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
@@ -406,12 +490,67 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
                 IconButton(
                   icon: const Icon(Icons.refresh_rounded, color: Color(0xFF007AFF)),
                   onPressed: _fetchDeviceData,
+                  tooltip: "Refresh Data",
+                ),
+                IconButton(
+                  icon: const Icon(Icons.wifi_rounded, color: Color(0xFF007AFF)),
+                  tooltip: "Configure Router Wi-Fi",
+                  onPressed: () => _showWifiConfigDialog(context),
                 ),
                 IconButton(
                   icon: const Icon(Icons.close_rounded),
                   onPressed: () => Navigator.pop(context),
                 ),
               ],
+            ),
+          ),
+          // TARGET MACHINE / ZONE SELECTOR
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.devices_other_rounded, color: Color(0xFF007AFF), size: 20),
+                  const SizedBox(width: 10),
+                  const Text("Target Machine:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _selectedTarget,
+                        isDense: true,
+                        isExpanded: true,
+                        items: _availableTargets.map((target) {
+                          String label = target;
+                          if (target == "Default (Connected Device)") {
+                            label = "Default (Connected Device)";
+                          } else if (target.startsWith("MQTT:")) {
+                            label = "MQTT Device: ${target.replaceFirst("MQTT: ", "")}";
+                          } else {
+                            label = "IP Device: $target";
+                          }
+                          return DropdownMenuItem(
+                            value: target,
+                            child: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() => _selectedTarget = val);
+                            _fetchDeviceData();
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const Divider(height: 1),
@@ -590,6 +729,118 @@ class _DeviceScheduleManagerSheetState extends State<DeviceScheduleManagerSheet>
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _showWifiConfigDialog(BuildContext context) async {
+    final ssidController = TextEditingController();
+    final passController = TextEditingController();
+    String wifiStatus = "Loading WiFi info...";
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          if (wifiStatus == "Loading WiFi info...") {
+            Esp32ApiService.sendRaw("\$WIFI#");
+            final sub = Esp32ApiService.listen().listen((msg) {
+              if (msg.contains("WIFI:")) {
+                if (dialogContext.mounted) {
+                  setDialogState(() => wifiStatus = msg);
+                }
+              }
+            });
+            Future.delayed(const Duration(seconds: 2), () => sub.cancel());
+          }
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            title: const Text("Configure Router Wi-Fi", style: TextStyle(fontWeight: FontWeight.bold)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF007AFF).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(wifiStatus, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF007AFF))),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: ssidController,
+                    decoration: InputDecoration(
+                      labelText: "Router Wi-Fi SSID",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: passController,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      labelText: "Router Password",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () async {
+                      final ssid = ssidController.text.trim();
+                      final pass = passController.text.trim();
+                      if (ssid.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("SSID cannot be empty")));
+                        return;
+                      }
+                      try {
+                        await Esp32ApiService.sendRaw("\$WIFI,$ssid,$pass#");
+                        if (!dialogContext.mounted) return;
+                        Navigator.pop(dialogContext);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("Wi-Fi configuration sent! Device is reconnecting..."), backgroundColor: Colors.green),
+                        );
+                      } catch (e) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("Failed to configure Wi-Fi: $e"), backgroundColor: Colors.red),
+                        );
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF007AFF), foregroundColor: Colors.white),
+                    child: const Text("Save & Apply to Device"),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: () async {
+                      try {
+                        await Esp32ApiService.sendRaw("\$WIFI,CLEAR#");
+                        if (!dialogContext.mounted) return;
+                        Navigator.pop(dialogContext);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("Wi-Fi reset to default successfully"), backgroundColor: Colors.orange),
+                        );
+                      } catch (e) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("Failed to reset Wi-Fi: $e"), backgroundColor: Colors.red),
+                        );
+                      }
+                    },
+                    style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                    child: const Text("Reset to Default Wi-Fi"),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("Close")),
+            ],
+          );
+        },
+      ),
     );
   }
 }

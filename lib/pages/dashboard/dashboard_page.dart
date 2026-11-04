@@ -6,15 +6,14 @@ import 'package:lottie/lottie.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../services/esp32_api_service.dart';
-import '../../services/device_discovery_service.dart';
 import '../../database/app_database.dart';
 import '../announcement/announcement_page.dart';
 import '../category/category_list_page.dart';
 import '../category/create_category_page.dart';
 import '../emergency/emergency_page.dart';
 import '../today_schedule_page.dart';
-import 'widgets/device_schedule_manager_sheet.dart';
 import 'settings_page.dart';
+import 'device_zones_hub_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -38,6 +37,19 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
   int currentVolume = 70;
   String? orgName;
   bool _isDeviceConnected = false;
+
+  String get _connectionText {
+    switch (Esp32ApiService.connectionType) {
+      case ConnectionType.apMode:
+        return "Connected to AP Mode";
+      case ConnectionType.ipMode:
+        return "Connected to IP Mode (${Esp32ApiService.espIp})";
+      case ConnectionType.mqttMode:
+        return "Connected to MQTT Mode (SB001)";
+      case ConnectionType.disconnected:
+        return "Disconnected";
+    }
+  }
 
   StreamSubscription<bool>? _connectionSub;
   late final Future<Database> _dbFuture;
@@ -978,12 +990,16 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                     ),
                   ),
                   const SizedBox(width: 6),
-                  Text(
-                    _isDeviceConnected ? "Connected to SyncroBell" : "Not connected to device",
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: _isDeviceConnected ? Colors.green : Colors.red,
+                  Expanded(
+                    child: Text(
+                      _connectionText,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _isDeviceConnected ? Colors.green : Colors.red,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -1000,20 +1016,19 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
               elevation: 2,
               shadowColor: Colors.black.withAlpha((255 * 0.05).round()),
               child: IconButton(
-                onPressed: () async {
-                  final connected = await Esp32ApiService.checkConnection();
-                  if (mounted) {
-                    setState(() => _isDeviceConnected = connected);
-                    DeviceScheduleManagerSheet.show(context);
-                  }
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const DeviceZonesHubPage()),
+                  );
                 },
-                icon: Icon(
-                  _isDeviceConnected ? Icons.router_rounded : Icons.wifi_find_rounded,
-                  color: _isDeviceConnected ? const Color(0xFF34C759) : Colors.red,
+                icon: const Icon(
+                  Icons.devices_other_rounded,
+                  color: Color(0xFF007AFF),
                   size: 22,
                 ),
                 splashRadius: 24,
-                tooltip: _isDeviceConnected ? "Machine Schedules" : "Connect Device",
+                tooltip: "MQTT Device Groups & Zones",
               ),
             ),
             const SizedBox(width: 10),
@@ -1023,10 +1038,15 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
               elevation: 2,
               shadowColor: Colors.black.withAlpha((255 * 0.05).round()),
               child: IconButton(
-                onPressed: _showDeviceScannerDialog,
-                icon: const Icon(Icons.cast_connected_rounded, color: Color(0xFF007AFF), size: 22),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const DeviceZonesHubPage()),
+                  );
+                },
+                icon: const Icon(Icons.hub_rounded, color: Color(0xFF007AFF), size: 22),
                 splashRadius: 24,
-                tooltip: "Add / Scan Device (IP Mode)",
+                tooltip: "Zones & MQTT Hub",
               ),
             ),
             const SizedBox(width: 10),
@@ -1044,130 +1064,12 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                 },
                 icon: const Icon(Icons.settings_rounded, color: Color(0xFF007AFF), size: 22),
                 splashRadius: 24,
+                tooltip: "Setting",
               ),
             ),
           ],
         ),
       ],
-    );
-  }
-
-  void _showDeviceScannerDialog() {
-    List<DiscoveredDevice> discovered = [];
-    bool isScanning = false;
-    final ipController = TextEditingController(text: Esp32ApiService.espIp);
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          title: const Text("Add & Connect Device (IP Mode)", style: TextStyle(fontWeight: FontWeight.bold)),
-          content: SizedBox(
-            width: 320,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text("Scan local network for SyncroBell devices or enter IP manually:"),
-                const SizedBox(height: 16),
-                ElevatedButton.icon(
-                  onPressed: isScanning ? null : () async {
-                    setDialogState(() {
-                      isScanning = true;
-                      discovered.clear();
-                    });
-                    final devices = await DeviceDiscoveryService.scanDevices();
-                    setDialogState(() {
-                      discovered = devices;
-                      isScanning = false;
-                    });
-                  },
-                  icon: isScanning 
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Icon(Icons.radar_rounded),
-                  label: Text(isScanning ? "Scanning Network..." : "Scan for Devices"),
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF007AFF), foregroundColor: Colors.white),
-                ),
-                const SizedBox(height: 16),
-                if (discovered.isNotEmpty) ...[
-                  const Text("Discovered Devices:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                  const SizedBox(height: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 160),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: discovered.length,
-                      itemBuilder: (context, index) {
-                        final d = discovered[index];
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          child: ListTile(
-                            dense: true,
-                            leading: const Icon(Icons.router_rounded, color: Color(0xFF34C759)),
-                            title: Text("${d.id} (${d.ip})", style: const TextStyle(fontWeight: FontWeight.bold)),
-                            subtitle: Text("Port: ${d.port}"),
-                            trailing: ElevatedButton(
-                              onPressed: () async {
-                                await Esp32ApiService.setDeviceIp(d.ip);
-                                final connected = await Esp32ApiService.checkConnection();
-                                if (!context.mounted) return;
-                                if (mounted) {
-                                  setState(() => _isDeviceConnected = connected);
-                                }
-                                Navigator.pop(context);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text("Connected to ${d.id} (${d.ip})"), backgroundColor: Colors.green),
-                                );
-                              },
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 12)),
-                              child: const Text("Connect"),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const Divider(height: 24),
-                ],
-                const Text("Or Enter IP Manually (IP Mode):", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: ipController,
-                  decoration: InputDecoration(
-                    labelText: "Device IP Address (e.g. 192.168.4.1)",
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    isDense: true,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                ElevatedButton(
-                  onPressed: () async {
-                    final ip = ipController.text.trim();
-                    if (ip.isNotEmpty) {
-                      await Esp32ApiService.setDeviceIp(ip);
-                      final connected = await Esp32ApiService.checkConnection();
-                      if (!context.mounted) return;
-                      if (mounted) {
-                        setState(() => _isDeviceConnected = connected);
-                      }
-                      Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(connected ? "Connected to $ip" : "Saved $ip (Connecting...)"), backgroundColor: connected ? Colors.green : Colors.orange),
-                      );
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF007AFF), foregroundColor: Colors.white),
-                  child: const Text("Save & Connect via IP"),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Close")),
-          ],
-        ),
-      ),
     );
   }
 

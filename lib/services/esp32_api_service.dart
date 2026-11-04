@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'bell_mqtt_service.dart';
 
+enum ConnectionType { apMode, ipMode, mqttMode, disconnected }
+
 class Esp32ApiService {
   static String espIp = "192.168.4.1";
   static const int tcpPort = 23; 
@@ -25,7 +27,6 @@ class Esp32ApiService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('saved_device_ip', ip);
     } catch (_) {}
-    _apModeAvailable = true; // Reset so new IP is tried
     await _closeConnection();
   }
 
@@ -55,18 +56,11 @@ class Esp32ApiService {
     BellMqttService.connect().catchError((_) {});
   }
 
-  static bool _apModeAvailable = true;
-  static DateTime? _lastApFailTime;
-
   // --- PRIVATE METHODS ---
 
   static Future<void> _ensureConnection() async {
     if (_isConnected && _socket != null) {
       return;
-    }
-
-    if (!_apModeAvailable && _lastApFailTime != null && DateTime.now().difference(_lastApFailTime!).inSeconds < 10) {
-      throw SocketException("AP/IP mode recently failed, skipping local connect.");
     }
 
     if (_connectionCompleter != null) {
@@ -82,15 +76,27 @@ class Esp32ApiService {
       debugPrint("Connecting to SyncroBell device at $espIp:$tcpPort...");
       await _closeConnectionSilently();
 
-      _socket = await Socket.connect(
-        espIp,
-        tcpPort,
-        timeout: const Duration(seconds: 1),
-      );
+      try {
+        _socket = await Socket.connect(
+          espIp,
+          tcpPort,
+          timeout: const Duration(seconds: 2),
+        );
+      } catch (e) {
+        if (espIp != "192.168.4.1") {
+          debugPrint("Primary IP $espIp failed. Trying AP mode fallback IP 192.168.4.1...");
+          _socket = await Socket.connect(
+            "192.168.4.1",
+            tcpPort,
+            timeout: const Duration(seconds: 2),
+          );
+          espIp = "192.168.4.1";
+        } else {
+          rethrow;
+        }
+      }
 
       _isConnected = true;
-      _apModeAvailable = true;
-      _lastApFailTime = null;
       _connectionStateController.add(true);
       debugPrint("Connected to SyncroBell device via Local AP/IP ($espIp).");
 
@@ -119,8 +125,6 @@ class Esp32ApiService {
       );
     } catch (e) {
       debugPrint("Local connection failed: $e");
-      _apModeAvailable = false;
-      _lastApFailTime = DateTime.now();
       await _closeConnection();
       rethrow;
     } finally {
@@ -149,7 +153,7 @@ class Esp32ApiService {
   // --- PUBLIC API ---
 
   static Future<bool> checkConnection() async {
-    // 1. Try local AP/IP socket first if available
+    // 1. Try local AP/IP socket first
     if (_isConnected && _socket != null) return true;
     try {
       await _ensureConnection();
@@ -174,7 +178,7 @@ class Esp32ApiService {
   /// Sends a raw command string. 
   /// Prioritizes local TCP socket (AP/IP mode) if nearby, otherwise falls back to MQTT (Cloud mode).
   static Future<void> sendRaw(String command) async {
-    // 1. Try local AP/IP socket first
+    // 1. Try local AP/IP socket if connected
     if (_isConnected && _socket != null) {
       try {
         debugPrint("Sending Command via Local Socket: $command");
@@ -186,6 +190,19 @@ class Esp32ApiService {
       }
     }
 
+    // 2. If MQTT is connected, go straight to MQTT (skip local TCP timeout attempts)
+    if (BellMqttService.isConnected) {
+      try {
+        debugPrint("Sending Command via MQTT: $command");
+        await BellMqttService.sendCommand(command);
+        return;
+      } catch (e) {
+        debugPrint("MQTT send failed: $e");
+        rethrow;
+      }
+    }
+
+    // 3. Try connecting local socket once
     try {
       await _ensureConnection();
       if (_isConnected && _socket != null) {
@@ -198,7 +215,7 @@ class Esp32ApiService {
       debugPrint("Local socket unavailable, falling back to MQTT: $e");
     }
 
-    // 2. Fallback to MQTT (Cloud mode)
+    // 4. Final fallback to MQTT
     try {
       await BellMqttService.connect();
       if (BellMqttService.isConnected) {
@@ -231,6 +248,27 @@ class Esp32ApiService {
       }
     }
 
+    // 2. If MQTT is connected, go straight to MQTT
+    if (BellMqttService.isConnected) {
+      try {
+        debugPrint("Sending ${bytes.length} bytes via MQTT in chunks...");
+        const mqttChunkSize = 2000;
+        int offset = 0;
+        while (offset < bytes.length) {
+          final end = (offset + mqttChunkSize).clamp(0, bytes.length);
+          final subChunk = bytes.sublist(offset, end);
+          await BellMqttService.sendFileBytes(subChunk);
+          offset = end;
+          await Future.delayed(const Duration(milliseconds: 5));
+        }
+        return;
+      } catch (e) {
+        debugPrint("MQTT sendBytes failed: $e");
+        rethrow;
+      }
+    }
+
+    // 3. Try connecting local socket once
     try {
       await _ensureConnection();
       if (_isConnected && _socket != null) {
@@ -243,7 +281,7 @@ class Esp32ApiService {
       debugPrint("Local socket unavailable for bytes: $e");
     }
 
-    // 2. Fallback to MQTT (split into MQTT-safe chunks of 2000 bytes)
+    // 4. Final fallback to MQTT
     try {
       await BellMqttService.connect();
       if (BellMqttService.isConnected) {
@@ -324,6 +362,19 @@ class Esp32ApiService {
 
   static Future<void> getStatus() async {
     await sendRaw("\$STATUS#");
+  }
+
+  static ConnectionType get connectionType {
+    if (_isConnected && _socket != null) {
+      if (espIp == "192.168.4.1") {
+        return ConnectionType.apMode;
+      } else {
+        return ConnectionType.ipMode;
+      }
+    } else if (BellMqttService.isConnected) {
+      return ConnectionType.mqttMode;
+    }
+    return ConnectionType.disconnected;
   }
 
   static Future<void> disconnect() => _closeConnection();
